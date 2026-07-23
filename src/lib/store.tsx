@@ -1,6 +1,7 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
+import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from "react";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import type {
   Database,
   Profile,
@@ -15,7 +16,6 @@ import type {
   RiskFlag,
   ProfessionalNote,
   Strategy,
-  RiskStatus,
   ProfessionalUserLink,
 } from "./types";
 import { buildDemoDatabase, uid, USER_ID, ADMIN_ID } from "./demo-data";
@@ -23,18 +23,27 @@ import { computeConsistency } from "./consistency";
 import { classifyPatterns, type PatternSummary } from "./patterns";
 import { buildWeeklyReport } from "./reports";
 import { analyzeSafetyLocal } from "./ai/safety";
+import { isSupabaseConfigured } from "./supabase/config";
+import { createClient } from "./supabase/client";
+import { loadDatabase, newId, clean } from "./supabase/data";
 
 const DB_KEY = "metanoia_db_v1";
 const SESSION_KEY = "metanoia_session_v1";
+const SB = isSupabaseConfigured;
 
 interface StoreValue {
   db: Database;
   currentUserId: string | null;
   currentProfile: Profile | null;
   ready: boolean;
-  // sessão
+  mode: "demo" | "supabase";
+  authError: string | null;
+  // sessão (demo)
   login: (role: Role) => void;
   logout: () => void;
+  // sessão (supabase)
+  signIn: (email: string, password: string) => Promise<{ error?: string }>;
+  signUp: (email: string, password: string, preferredName: string) => Promise<{ error?: string }>;
   // usuário
   completeOnboarding: (data: OnboardingData) => void;
   addCheckin: (input: Partial<MealCheckin> & { status: MealCheckin["status"] }) => MealCheckin;
@@ -77,66 +86,121 @@ export interface OnboardingData {
 
 const StoreContext = createContext<StoreValue | null>(null);
 
-function loadDb(): Database {
+function genId(prefix = "id"): string {
+  return SB ? newId() : uid(prefix);
+}
+
+function loadLocalDb(): Database {
   if (typeof window === "undefined") return buildDemoDatabase();
   try {
     const raw = localStorage.getItem(DB_KEY);
     if (raw) return JSON.parse(raw) as Database;
   } catch {
-    // ignora e recria
+    /* ignora */
   }
-  const seeded = buildDemoDatabase();
-  return seeded;
+  return buildDemoDatabase();
 }
 
 export function StoreProvider({ children }: { children: React.ReactNode }) {
-  const [db, setDb] = useState<Database>(() => buildDemoDatabase());
+  const [db, setDb] = useState<Database>(() => (SB ? emptyDatabase() : buildDemoDatabase()));
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const supabaseRef = useRef<SupabaseClient | null>(null);
 
+  // ---------- Inicialização ----------
   useEffect(() => {
-    const loaded = loadDb();
-    setDb(loaded);
-    try {
-      const s = localStorage.getItem(SESSION_KEY);
-      if (s) setCurrentUserId(s);
-    } catch {
-      /* noop */
+    if (!SB) {
+      setDb(loadLocalDb());
+      try {
+        const s = localStorage.getItem(SESSION_KEY);
+        if (s) setCurrentUserId(s);
+      } catch {
+        /* noop */
+      }
+      setReady(true);
+      return;
     }
-    setReady(true);
+
+    const supabase = createClient();
+    supabaseRef.current = supabase;
+    if (!supabase) {
+      setReady(true);
+      return;
+    }
+
+    let active = true;
+    async function bootstrap(uidStr: string | null) {
+      if (!uidStr) {
+        if (active) {
+          setDb(emptyDatabase());
+          setCurrentUserId(null);
+          setReady(true);
+        }
+        return;
+      }
+      const data = await loadDatabase(supabase!);
+      if (!active) return;
+      setDb(data);
+      setCurrentUserId(uidStr);
+      setReady(true);
+    }
+
+    supabase.auth.getUser().then(({ data }) => bootstrap(data.user?.id ?? null));
+
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      bootstrap(session?.user?.id ?? null);
+    });
+
+    return () => {
+      active = false;
+      sub.subscription.unsubscribe();
+    };
   }, []);
 
-  const persist = useCallback((next: Database) => {
-    setDb(next);
-    try {
-      localStorage.setItem(DB_KEY, JSON.stringify(next));
-    } catch {
-      /* quota */
-    }
+  // ---------- write-through helpers (supabase) ----------
+  const sbInsert = useCallback(async (table: string, row: Record<string, unknown>) => {
+    if (!SB || !supabaseRef.current) return;
+    const { error } = await supabaseRef.current.from(table).insert(clean(row));
+    if (error) console.warn(`insert ${table}:`, error.message);
   }, []);
 
-  const mutate = useCallback(
-    (fn: (draft: Database) => void) => {
-      setDb((prev) => {
-        const next: Database = JSON.parse(JSON.stringify(prev));
-        fn(next);
+  const sbUpsert = useCallback(async (table: string, row: Record<string, unknown>, onConflict: string) => {
+    if (!SB || !supabaseRef.current) return;
+    const { error } = await supabaseRef.current.from(table).upsert(clean(row), { onConflict });
+    if (error) console.warn(`upsert ${table}:`, error.message);
+  }, []);
+
+  const sbUpdate = useCallback(async (table: string, id: string, patch: Record<string, unknown>) => {
+    if (!SB || !supabaseRef.current) return;
+    const { error } = await supabaseRef.current.from(table).update(clean(patch)).eq("id", id);
+    if (error) console.warn(`update ${table}:`, error.message);
+  }, []);
+
+  // Atualiza o estado local (e persiste no localStorage apenas em modo demo).
+  const mutate = useCallback((fn: (draft: Database) => void) => {
+    setDb((prev) => {
+      const next: Database = structuredClone(prev);
+      fn(next);
+      if (!SB) {
         try {
           localStorage.setItem(DB_KEY, JSON.stringify(next));
         } catch {
           /* quota */
         }
-        return next;
-      });
-    },
-    []
-  );
+      }
+      return next;
+    });
+  }, []);
 
   const currentProfile = currentUserId
     ? db.profiles.find((p) => p.id === currentUserId) || null
     : null;
 
+  // ---------- Auth ----------
   const login = useCallback((role: Role) => {
-    const id = role === "user" ? USER_ID : role === "professional" ? PRO_ID_PROFILE() : ADMIN_ID;
+    if (SB) return; // demo apenas
+    const id = role === "user" ? USER_ID : role === "professional" ? "demo-pro-laura-profile" : ADMIN_ID;
     setCurrentUserId(id);
     try {
       localStorage.setItem(SESSION_KEY, id);
@@ -146,6 +210,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const logout = useCallback(() => {
+    if (SB && supabaseRef.current) {
+      supabaseRef.current.auth.signOut();
+      setCurrentUserId(null);
+      setDb(emptyDatabase());
+      return;
+    }
     setCurrentUserId(null);
     try {
       localStorage.removeItem(SESSION_KEY);
@@ -154,81 +224,125 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const signIn = useCallback<StoreValue["signIn"]>(async (email, password) => {
+    setAuthError(null);
+    if (!supabaseRef.current) return { error: "Supabase não configurado." };
+    const { error } = await supabaseRef.current.auth.signInWithPassword({ email, password });
+    if (error) {
+      setAuthError(traduzErro(error.message));
+      return { error: traduzErro(error.message) };
+    }
+    return {};
+  }, []);
+
+  const signUp = useCallback<StoreValue["signUp"]>(async (email, password, preferredName) => {
+    setAuthError(null);
+    if (!supabaseRef.current) return { error: "Supabase não configurado." };
+    const { error } = await supabaseRef.current.auth.signUp({
+      email,
+      password,
+      options: { data: { preferred_name: preferredName, full_name: preferredName } },
+    });
+    if (error) {
+      setAuthError(traduzErro(error.message));
+      return { error: traduzErro(error.message) };
+    }
+    return {};
+  }, []);
+
+  // ---------- logAudit ----------
   const logAudit = useCallback(
     (action: string, resourceType: string, resourceId: string, metadata: Record<string, unknown> = {}) => {
+      const row = {
+        id: genId("audit"),
+        actor_id: currentUserId || "system",
+        action,
+        resource_type: resourceType,
+        resource_id: resourceId,
+        metadata,
+        created_at: new Date().toISOString(),
+      };
       mutate((d) => {
-        d.audit_logs.unshift({
-          id: uid("audit"),
-          actor_id: currentUserId || "system",
-          action,
-          resource_type: resourceType,
-          resource_id: resourceId,
-          metadata,
-          created_at: new Date().toISOString(),
-        });
+        d.audit_logs.unshift(row);
       });
+      // Auditoria server-side é feita com service role; no cliente é best-effort.
+      sbInsert("audit_logs", row);
     },
-    [mutate, currentUserId]
+    [mutate, currentUserId, sbInsert]
   );
 
+  // ---------- Onboarding ----------
   const completeOnboarding = useCallback(
     (data: OnboardingData) => {
       if (!currentUserId) return;
+      const nowIso = new Date().toISOString();
+      const goal = {
+        id: genId("goal"),
+        user_id: currentUserId,
+        goal_type: data.goal_type,
+        description: data.goal_description,
+        active: true,
+        created_at: nowIso,
+        updated_at: nowIso,
+      };
+      const acceptance = {
+        id: genId("acc"),
+        user_id: currentUserId,
+        document_id: currentDocId(db, "terms"),
+        accepted_at: nowIso,
+        ip_address: null,
+        user_agent: typeof navigator !== "undefined" ? navigator.userAgent : null,
+      };
+      const prefsRow = {
+        id: genId("np"),
+        user_id: currentUserId,
+        enabled: data.support_times.length > 0,
+        allowed_days: [0, 1, 2, 3, 4, 5, 6],
+        allowed_start_time: "08:00",
+        allowed_end_time: "21:00",
+        maximum_daily_notifications: 2,
+        preventive_enabled: true,
+        checkin_enabled: true,
+        support_times: data.support_times,
+        timezone: "America/Sao_Paulo",
+        created_at: nowIso,
+        updated_at: nowIso,
+      };
       mutate((d) => {
         const p = d.profiles.find((x) => x.id === currentUserId);
-        if (!p) return;
-        p.preferred_name = data.preferred_name || p.preferred_name;
-        p.onboarding_completed = true;
-        p.terms_version = "1.0";
-        p.terms_accepted_at = new Date().toISOString();
-        p.privacy_version = "1.0";
-        p.privacy_accepted_at = new Date().toISOString();
-        d.behavioral_goals.push({
-          id: uid("goal"),
-          user_id: currentUserId,
-          goal_type: data.goal_type as never,
-          description: data.goal_description,
-          active: true,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        });
-        d.legal_acceptances.push({
-          id: uid("acc"),
-          user_id: currentUserId,
-          document_id: "legal-terms-1",
-          accepted_at: new Date().toISOString(),
-          ip_address: null,
-          user_agent: typeof navigator !== "undefined" ? navigator.userAgent : null,
-        });
-        const np = d.notification_preferences.find((n) => n.user_id === currentUserId);
-        if (np) {
-          np.support_times = data.support_times;
-        } else {
-          d.notification_preferences.push({
-            id: uid("np"),
-            user_id: currentUserId,
-            enabled: data.support_times.length > 0,
-            allowed_days: [0, 1, 2, 3, 4, 5, 6],
-            allowed_start_time: "08:00",
-            allowed_end_time: "21:00",
-            maximum_daily_notifications: 2,
-            preventive_enabled: true,
-            checkin_enabled: true,
-            support_times: data.support_times,
-            timezone: "America/Sao_Paulo",
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          });
+        if (p) {
+          p.preferred_name = data.preferred_name || p.preferred_name;
+          p.onboarding_completed = true;
+          p.terms_version = "1.0";
+          p.terms_accepted_at = nowIso;
+          p.privacy_version = "1.0";
+          p.privacy_accepted_at = nowIso;
         }
+        d.behavioral_goals.push(goal as never);
+        d.legal_acceptances.push(acceptance as never);
+        const existing = d.notification_preferences.find((n) => n.user_id === currentUserId);
+        if (existing) existing.support_times = data.support_times;
+        else d.notification_preferences.push(prefsRow as never);
       });
+      sbUpdate("profiles", currentUserId, {
+        preferred_name: data.preferred_name,
+        onboarding_completed: true,
+        terms_version: "1.0",
+        terms_accepted_at: nowIso,
+        privacy_version: "1.0",
+        privacy_accepted_at: nowIso,
+      });
+      sbInsert("behavioral_goals", goal);
+      if (acceptance.document_id) sbInsert("legal_acceptances", acceptance);
+      sbUpsert("notification_preferences", prefsRow, "user_id");
     },
-    [currentUserId, mutate]
+    [currentUserId, db, mutate, sbUpdate, sbInsert, sbUpsert]
   );
 
   const addCheckin: StoreValue["addCheckin"] = useCallback(
     (input) => {
       const checkin: MealCheckin = {
-        id: uid("chk"),
+        id: genId("chk"),
         user_id: input.user_id || currentUserId || USER_ID,
         meal_type: input.meal_type ?? null,
         custom_meal_name: input.custom_meal_name ?? null,
@@ -240,29 +354,31 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       mutate((d) => {
         d.meal_checkins.unshift(checkin);
       });
+      sbInsert("meal_checkins", checkin as unknown as Record<string, unknown>);
       return checkin;
     },
-    [currentUserId, mutate]
+    [currentUserId, mutate, sbInsert]
   );
 
   const recordDifficulty: StoreValue["recordDifficulty"] = useCallback(
     (userId, answers, conversationId) => {
+      const nowIso = new Date().toISOString();
       const event: DifficultyEvent = {
-        id: uid("diff"),
+        id: genId("diff"),
         user_id: userId,
         checkin_id: null,
         conversation_id: conversationId || null,
-        occurred_at: new Date().toISOString(),
+        occurred_at: nowIso,
         primary_reason: (answers.reasons as string[])?.[0] || null,
         reasons: (answers.reasons as string[]) || [],
         context: (answers.situation as string) || null,
         hunger_intensity: (answers.hunger_intensity as number) ?? null,
         urge_intensity: (answers.urge_intensity as number) ?? null,
         emotional_intensity: (answers.emotional_intensity as number) ?? null,
-        created_at: new Date().toISOString(),
+        created_at: nowIso,
       };
       const thought: ThoughtRecord = {
-        id: uid("thr"),
+        id: genId("thr"),
         user_id: userId,
         difficulty_event_id: event.id,
         situation: (answers.situation as string) || undefined,
@@ -272,40 +388,45 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         consequences: (answers.consequences as string) || undefined,
         decision_point: (answers.decision_point as string) || undefined,
         alternative_thought: (answers.alternative_thought as string) || undefined,
-        created_at: new Date().toISOString(),
+        created_at: nowIso,
       };
+      let trial: StrategyTrial | null = null;
+      if (answers.commitment && answers.strategy_choice) {
+        trial = {
+          id: genId("trial"),
+          user_id: userId,
+          strategy_id: null as unknown as string,
+          difficulty_event_id: event.id,
+          planned_for: new Date(Date.now() + 86400000).toISOString(),
+          tested_at: null,
+          result: "not_tested",
+          user_feedback: null,
+          title_snapshot: answers.strategy_choice as string,
+          created_at: nowIso,
+          updated_at: nowIso,
+        };
+      }
       mutate((d) => {
         d.difficulty_events.unshift(event);
         d.thought_records.unshift(thought);
-        // compromisso vira estratégia planejada
-        if (answers.commitment && answers.strategy_choice) {
-          d.strategy_trials.unshift({
-            id: uid("trial"),
-            user_id: userId,
-            strategy_id: "custom",
-            difficulty_event_id: event.id,
-            planned_for: new Date(Date.now() + 86400000).toISOString(),
-            tested_at: null,
-            result: "not_tested",
-            user_feedback: null,
-            title_snapshot: answers.strategy_choice as string,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          });
-        }
+        if (trial) d.strategy_trials.unshift(trial);
       });
+      sbInsert("difficulty_events", event as unknown as Record<string, unknown>);
+      sbInsert("thought_records", thought as unknown as Record<string, unknown>);
+      if (trial) sbInsert("strategy_trials", trial as unknown as Record<string, unknown>);
       return { event, thought };
     },
-    [mutate]
+    [mutate, sbInsert]
   );
 
   const saveCopingCard: StoreValue["saveCopingCard"] = useCallback(
     (userId, patch) => {
+      let snapshot: CopingCard | null = null;
       mutate((d) => {
         let card = d.coping_cards.find((c) => c.user_id === userId);
         if (!card) {
           card = {
-            id: uid("card"),
+            id: genId("card"),
             user_id: userId,
             completed_percentage: 0,
             created_at: new Date().toISOString(),
@@ -328,41 +449,45 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         const filled = fields.filter((f) => f && String(f).trim().length > 0).length;
         card.completed_percentage = Math.round((filled / fields.length) * 100);
         card.updated_at = new Date().toISOString();
+        snapshot = structuredClone(card);
       });
+      if (snapshot) sbUpsert("coping_cards", snapshot as unknown as Record<string, unknown>, "user_id");
     },
-    [mutate]
+    [mutate, sbUpsert]
   );
 
   const createConversation: StoreValue["createConversation"] = useCallback(
     (userId, type, title) => {
       const profile = db.profiles.find((p) => p.id === userId);
+      const nowIso = new Date().toISOString();
       const conv: Conversation = {
-        id: uid("conv"),
+        id: genId("conv"),
         user_id: userId,
         professional_id: profile?.professional_id || null,
         type,
         status: "open",
         title,
-        started_at: new Date().toISOString(),
+        started_at: nowIso,
         ended_at: null,
         risk_level: "none",
         summary: null,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
+        created_at: nowIso,
+        updated_at: nowIso,
       };
       mutate((d) => {
         d.conversations.unshift(conv);
       });
+      sbInsert("conversations", conv as unknown as Record<string, unknown>);
       return conv;
     },
-    [db.profiles, mutate]
+    [db.profiles, mutate, sbInsert]
   );
 
   const addMessage: StoreValue["addMessage"] = useCallback(
     (msg) => {
       const full: ConversationMessage = {
         ...msg,
-        id: uid("msg"),
+        id: genId("msg"),
         created_at: new Date().toISOString(),
       };
       mutate((d) => {
@@ -370,106 +495,109 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         const conv = d.conversations.find((c) => c.id === msg.conversation_id);
         if (conv) conv.updated_at = full.created_at;
       });
+      sbInsert("conversation_messages", full as unknown as Record<string, unknown>);
       return full;
     },
-    [mutate]
+    [mutate, sbInsert]
   );
 
   const closeConversation: StoreValue["closeConversation"] = useCallback(
     (conversationId, summary) => {
+      const endedAt = new Date().toISOString();
       mutate((d) => {
         const conv = d.conversations.find((c) => c.id === conversationId);
         if (conv) {
           conv.status = "closed";
-          conv.ended_at = new Date().toISOString();
+          conv.ended_at = endedAt;
           if (summary) conv.summary = summary;
         }
       });
+      sbUpdate("conversations", conversationId, { status: "closed", ended_at: endedAt, summary });
     },
-    [mutate]
+    [mutate, sbUpdate]
   );
 
   const addStrategyTrial: StoreValue["addStrategyTrial"] = useCallback(
     (input) => {
+      const nowIso = new Date().toISOString();
       const trial: StrategyTrial = {
-        id: uid("trial"),
+        id: genId("trial"),
         user_id: input.user_id,
-        strategy_id: input.strategy_id || "custom",
+        strategy_id: input.strategy_id ?? (null as unknown as string),
         difficulty_event_id: input.difficulty_event_id ?? null,
         planned_for: input.planned_for ?? null,
         tested_at: input.tested_at ?? null,
         result: input.result || "not_tested",
         user_feedback: input.user_feedback ?? null,
         title_snapshot: input.title_snapshot,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
+        created_at: nowIso,
+        updated_at: nowIso,
       };
       mutate((d) => {
         d.strategy_trials.unshift(trial);
       });
+      sbInsert("strategy_trials", trial as unknown as Record<string, unknown>);
       return trial;
     },
-    [mutate]
+    [mutate, sbInsert]
   );
 
   const updateStrategyTrial: StoreValue["updateStrategyTrial"] = useCallback(
     (id, patch) => {
+      const updated = { ...patch, updated_at: new Date().toISOString() };
       mutate((d) => {
         const t = d.strategy_trials.find((x) => x.id === id);
-        if (t) {
-          Object.assign(t, patch);
-          t.updated_at = new Date().toISOString();
-        }
+        if (t) Object.assign(t, updated);
       });
+      sbUpdate("strategy_trials", id, updated as Record<string, unknown>);
     },
-    [mutate]
+    [mutate, sbUpdate]
   );
 
   const runSafety: StoreValue["runSafety"] = useCallback(
     (userId, text, conversationId, messageId) => {
       const result = analyzeSafetyLocal(text);
-      if (result.risk && (result.level === "medium" || result.level === "high" || result.categories.length)) {
+      if (result.risk && result.categories.length) {
+        const flags = result.categories.map((cat) => ({
+          id: genId("risk"),
+          user_id: userId,
+          conversation_id: conversationId || null,
+          message_id: messageId || null,
+          category: cat.category,
+          severity: cat.severity,
+          evidence: cat.evidence,
+          status: "open" as const,
+          reviewed_by: null,
+          reviewed_at: null,
+          professional_note: null,
+          created_at: new Date().toISOString(),
+        }));
         mutate((d) => {
-          for (const cat of result.categories) {
-            d.risk_flags.unshift({
-              id: uid("risk"),
-              user_id: userId,
-              conversation_id: conversationId || null,
-              message_id: messageId || null,
-              category: cat.category,
-              severity: cat.severity,
-              evidence: cat.evidence,
-              status: "open",
-              reviewed_by: null,
-              reviewed_at: null,
-              professional_note: null,
-              created_at: new Date().toISOString(),
-            });
-          }
+          for (const f of flags) d.risk_flags.unshift(f);
           if (conversationId) {
             const conv = d.conversations.find((c) => c.id === conversationId);
             if (conv) conv.risk_level = result.level;
           }
         });
+        for (const f of flags) sbInsert("risk_flags", f as unknown as Record<string, unknown>);
+        if (conversationId) sbUpdate("conversations", conversationId, { risk_level: result.level });
       }
       return result;
     },
-    [mutate]
+    [mutate, sbInsert, sbUpdate]
   );
 
   const addProfessionalNote: StoreValue["addProfessionalNote"] = useCallback(
     (input) => {
+      const nowIso = new Date().toISOString();
+      const note = { ...input, id: genId("note"), created_at: nowIso, updated_at: nowIso };
       mutate((d) => {
-        d.professional_notes.unshift({
-          ...input,
-          id: uid("note"),
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        });
+        d.professional_notes.unshift(note);
       });
+      sbInsert("professional_notes", note as unknown as Record<string, unknown>);
       logAudit("add_professional_note", "user", input.user_id, { professional_id: input.professional_id });
     },
-    [mutate, logAudit]
+    [mutate, sbInsert, logAudit]
   );
 
   const updateRiskFlag: StoreValue["updateRiskFlag"] = useCallback(
@@ -478,14 +606,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         const f = d.risk_flags.find((x) => x.id === id);
         if (f) Object.assign(f, patch);
       });
+      sbUpdate("risk_flags", id, patch as Record<string, unknown>);
     },
-    [mutate]
+    [mutate, sbUpdate]
   );
 
   const createStrategy: StoreValue["createStrategy"] = useCallback(
     (input) => {
+      const nowIso = new Date().toISOString();
       const strat: Strategy = {
-        id: uid("strat"),
+        id: genId("strat"),
         title: input.title,
         description: input.description,
         category: input.category || "planejamento",
@@ -494,41 +624,47 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         professional_id: input.professional_id ?? null,
         global: input.global ?? false,
         active: true,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
+        created_at: nowIso,
+        updated_at: nowIso,
       };
       mutate((d) => {
         d.strategies.push(strat);
       });
+      sbInsert("strategies", strat as unknown as Record<string, unknown>);
       return strat;
     },
-    [mutate]
+    [mutate, sbInsert]
   );
 
   const linkUserToProfessional: StoreValue["linkUserToProfessional"] = useCallback(
     (userId, professionalId) => {
+      const link: ProfessionalUserLink = {
+        id: genId("link"),
+        professional_id: professionalId,
+        user_id: userId,
+        started_at: new Date().toISOString(),
+        ended_at: null,
+        active: true,
+      };
+      const closedIds: string[] = [];
       mutate((d) => {
         d.professional_user_links.forEach((l) => {
           if (l.user_id === userId && l.active) {
             l.active = false;
             l.ended_at = new Date().toISOString();
+            closedIds.push(l.id);
           }
         });
-        const link: ProfessionalUserLink = {
-          id: uid("link"),
-          professional_id: professionalId,
-          user_id: userId,
-          started_at: new Date().toISOString(),
-          ended_at: null,
-          active: true,
-        };
         d.professional_user_links.push(link);
         const p = d.profiles.find((x) => x.id === userId);
         if (p) p.professional_id = professionalId;
       });
+      for (const id of closedIds) sbUpdate("professional_user_links", id, { active: false, ended_at: new Date().toISOString() });
+      sbInsert("professional_user_links", link as unknown as Record<string, unknown>);
+      sbUpdate("profiles", userId, { professional_id: professionalId });
       logAudit("link_user", "user", userId, { professional_id: professionalId });
     },
-    [mutate, logAudit]
+    [mutate, sbUpdate, sbInsert, logAudit]
   );
 
   // ----- selectors -----
@@ -574,8 +710,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     currentUserId,
     currentProfile,
     ready,
+    mode: SB ? "supabase" : "demo",
+    authError,
     login,
     logout,
+    signIn,
+    signUp,
     completeOnboarding,
     addCheckin,
     recordDifficulty,
@@ -600,10 +740,27 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
 }
 
-// O profissional loga com o id do Professional (PRO_ID), mas o profile é PRO_PROFILE_ID.
-// Mapeamos para o profile do profissional para a sessão.
-function PRO_ID_PROFILE() {
-  return "demo-pro-laura-profile";
+function emptyDatabase(): Database {
+  return {
+    profiles: [], professionals: [], professional_user_links: [], behavioral_goals: [],
+    coping_cards: [], meal_checkins: [], difficulty_events: [], thought_records: [],
+    conversations: [], conversation_messages: [], strategies: [], strategy_trials: [],
+    pattern_snapshots: [], consistency_scores: [], weekly_reports: [], risk_flags: [],
+    professional_notes: [], notification_preferences: [], scheduled_interventions: [],
+    legal_documents: [], legal_acceptances: [], audit_logs: [],
+  };
+}
+
+function currentDocId(db: Database, type: "terms" | "privacy"): string {
+  return db.legal_documents.find((d) => d.type === type && d.active)?.id || "";
+}
+
+function traduzErro(msg: string): string {
+  if (/invalid login credentials/i.test(msg)) return "E-mail ou senha incorretos.";
+  if (/already registered|already exists/i.test(msg)) return "Este e-mail já está cadastrado.";
+  if (/password should be at least/i.test(msg)) return "A senha precisa ter pelo menos 6 caracteres.";
+  if (/email not confirmed/i.test(msg)) return "Confirme teu e-mail antes de entrar.";
+  return msg;
 }
 
 export function useStore(): StoreValue {
