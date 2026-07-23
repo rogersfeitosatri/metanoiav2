@@ -95,6 +95,22 @@ usar Supabase:
 
 ---
 
+## 3.1. Deploy na Vercel
+
+O app é um projeto Next.js padrão e **roda na Vercel sem nenhuma configuração extra** —
+em modo demo não precisa de variáveis de ambiente.
+
+1. Importe o repositório em [vercel.com/new](https://vercel.com/new). A Vercel detecta o
+   framework **Next.js** automaticamente (build `next build`, sem overrides).
+2. **Variáveis de ambiente:** nenhuma é obrigatória para o modo demo. Para produção com
+   Supabase/IA, adicione em *Project Settings → Environment Variables* as chaves do
+   `.env.example` (`NEXT_PUBLIC_DATA_MODE`, `NEXT_PUBLIC_SUPABASE_*`, `AI_PROVIDER`,
+   `ANTHROPIC_API_KEY`, etc.).
+3. Deploy. Node é fixado em `>=18.18` (`engines`) e `.nvmrc` sugere Node 22.
+
+> O ESLint não bloqueia o build (`next.config.mjs` → `eslint.ignoreDuringBuilds: true`),
+> mas a **checagem de tipos do TypeScript continua ativa** no build.
+
 ## 4. Configurar o provedor de IA
 
 A IA é acessada por uma camada abstrata (`src/lib/ai/provider.ts`):
