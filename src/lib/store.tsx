@@ -314,12 +314,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           d.coping_cards.push(card);
         }
         Object.assign(card, patch);
+        const impactCount = card.life_impacts
+          ? Object.values(card.life_impacts).filter((v) => v && v.trim().length > 0).length
+          : 0;
         const fields = [
           card.desired_identity,
           card.main_goal,
-          card.why_it_matters,
-          card.future_difference,
-          card.cost_of_no_change,
+          impactCount >= 3 ? "x" : impactCount > 0 ? "half" : "",
           card.sabotaging_thoughts?.length ? "x" : "",
           card.reminder_statement,
           card.personal_commitment,

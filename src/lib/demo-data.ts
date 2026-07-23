@@ -433,9 +433,14 @@ export function buildDemoDatabase(): Database {
         user_id: USER_ID,
         desired_identity: "Alguém que cuida de si com constância, mesmo nos dias difíceis.",
         main_goal: "Seguir meu plano sem desistir quando algo sai diferente.",
-        why_it_matters: "Quero ter mais energia e me sentir em paz com a comida.",
-        future_difference: "Vou acordar sem culpa e com mais disposição.",
-        cost_of_no_change: "Continuar no ciclo de tentar, sair e desistir.",
+        life_impacts: {
+          saude: "Vou dormir melhor, ter menos azia e me sentir mais leve.",
+          emocional: "Menos culpa depois de comer e mais paz nas refeições.",
+          autoestima: "Vou confiar mais em mim por cumprir o que combino comigo.",
+          social: "Consigo aproveitar encontros sem ficar ansiosa com a comida.",
+          familiar: "Dou um exemplo melhor para meus filhos e como junto com eles.",
+          energia: "Mais disposição para o trabalho e para brincar à tarde.",
+        },
         sabotaging_thoughts: ["Já estraguei tudo.", "Depois eu compenso."],
         reminder_statement:
           "Uma escolha diferente não apaga tudo. Eu sempre posso retomar na próxima.",

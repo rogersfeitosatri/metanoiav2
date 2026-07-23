@@ -10,6 +10,7 @@ import {
   CONVERSATION_TYPE_LABELS,
   TRIAL_RESULT_LABELS,
   STRATEGY_CATEGORY_LABELS,
+  LIFE_IMPACT_DIMENSIONS,
 } from "@/lib/labels";
 import type { RiskStatus, StrategyCategory } from "@/lib/types";
 
@@ -428,16 +429,36 @@ function CopingCardTab({ userId }: { userId: string }) {
   const store = useStore();
   const card = store.db.coping_cards.find((c) => c.user_id === userId);
   if (!card) return <EmptyState>O usuário ainda não começou o Cartão de Enfrentamento.</EmptyState>;
+  const impacts = card.life_impacts || {};
+  const filledImpacts = LIFE_IMPACT_DIMENSIONS.filter((d) => impacts[d.key]?.trim());
   const rows: [string, string | string[] | undefined][] = [
-    ["Quem estou construindo", card.desired_identity],
+    ["Quem está construindo", card.desired_identity],
     ["Principal objetivo", card.main_goal],
-    ["Por que importa", card.why_it_matters],
     ["Pensamentos que afastam", card.sabotaging_thoughts],
     ["O que quer lembrar", card.reminder_statement],
     ["Compromisso", card.personal_commitment],
   ];
   return (
     <div className="space-y-3">
+      <Card>
+        <p className="text-xs font-medium uppercase tracking-wide text-sage-600">
+          Impacto de seguir o plano — por área de vida
+        </p>
+        {filledImpacts.length === 0 ? (
+          <p className="mt-1 text-warmgray-400">Ainda não preenchido.</p>
+        ) : (
+          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+            {filledImpacts.map((d) => (
+              <div key={d.key} className="rounded-xl bg-sand-50 p-3">
+                <p className="text-sm font-medium text-warmgray-800">
+                  {d.icon} {d.label}
+                </p>
+                <p className="text-sm text-warmgray-600">{impacts[d.key]}</p>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
       {rows.map(([label, value]) => (
         <Card key={label}>
           <p className="text-xs font-medium uppercase tracking-wide text-sage-600">{label}</p>

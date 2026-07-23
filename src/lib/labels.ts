@@ -202,5 +202,57 @@ export const STRATEGY_CATEGORY_LABELS: Record<StrategyCategory, string> = {
   planejamento: "Planejamento",
 };
 
+// Dimensões de vida do Cartão de Enfrentamento (Meu Norte).
+// "Como seguir o plano alimentar vai impactar a tua vida?"
+export const LIFE_IMPACT_DIMENSIONS: {
+  key: string;
+  label: string;
+  icon: string;
+  prompt: string;
+}[] = [
+  {
+    key: "saude",
+    label: "Saúde",
+    icon: "❤️",
+    prompt: "Como tua saúde e teu corpo vão sentir a diferença?",
+  },
+  {
+    key: "emocional",
+    label: "Emocional",
+    icon: "🌊",
+    prompt: "Como vai ficar tua relação com as emoções e com a comida?",
+  },
+  {
+    key: "autoestima",
+    label: "Autoestima",
+    icon: "✨",
+    prompt: "Como tu vai te enxergar e te sentir contigo mesmo?",
+  },
+  {
+    key: "social",
+    label: "Social",
+    icon: "🤝",
+    prompt: "O que muda na tua vida social e nos momentos com outras pessoas?",
+  },
+  {
+    key: "familiar",
+    label: "Familiar",
+    icon: "🏠",
+    prompt: "Como isso impacta tua família e quem convive contigo?",
+  },
+  {
+    key: "energia",
+    label: "Energia e disposição",
+    icon: "⚡",
+    prompt: "Como vai estar tua energia para o dia a dia?",
+  },
+  {
+    key: "profissional",
+    label: "Profissional",
+    icon: "💼",
+    prompt: "Como isso reflete no teu trabalho e nos teus objetivos?",
+  },
+];
+
 export const CURRENT_TERMS_VERSION = "1.0";
 export const CURRENT_PRIVACY_VERSION = "1.0";

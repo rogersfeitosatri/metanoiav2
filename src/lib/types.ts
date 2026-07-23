@@ -60,14 +60,16 @@ export interface BehavioralGoal {
   updated_at: string;
 }
 
+// Impacto de seguir o plano alimentar, por dimensão de vida.
+// Ex.: { saude: "...", emocional: "...", social: "..." }
+export type LifeImpacts = Record<string, string>;
+
 export interface CopingCard {
   id: string;
   user_id: string;
   desired_identity?: string;
   main_goal?: string;
-  why_it_matters?: string;
-  future_difference?: string;
-  cost_of_no_change?: string;
+  life_impacts?: LifeImpacts;
   sabotaging_thoughts?: string[];
   reminder_statement?: string;
   personal_commitment?: string;
