@@ -229,8 +229,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     if (!supabaseRef.current) return { error: "Supabase não configurado." };
     const { error } = await supabaseRef.current.auth.signInWithPassword({ email, password });
     if (error) {
-      setAuthError(traduzErro(error.message));
-      return { error: traduzErro(error.message) };
+      const msg = traduzErro(error.message, error.status);
+      setAuthError(msg);
+      return { error: msg };
     }
     return {};
   }, []);
@@ -244,8 +245,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       options: { data: { preferred_name: preferredName, full_name: preferredName } },
     });
     if (error) {
-      setAuthError(traduzErro(error.message));
-      return { error: traduzErro(error.message) };
+      const msg = traduzErro(error.message, error.status);
+      setAuthError(msg);
+      return { error: msg };
     }
     return {};
   }, []);
@@ -755,12 +757,24 @@ function currentDocId(db: Database, type: "terms" | "privacy"): string {
   return db.legal_documents.find((d) => d.type === type && d.active)?.id || "";
 }
 
-function traduzErro(msg: string): string {
-  if (/invalid login credentials/i.test(msg)) return "E-mail ou senha incorretos.";
-  if (/already registered|already exists/i.test(msg)) return "Este e-mail já está cadastrado.";
-  if (/password should be at least/i.test(msg)) return "A senha precisa ter pelo menos 6 caracteres.";
-  if (/email not confirmed/i.test(msg)) return "Confirme teu e-mail antes de entrar.";
-  return msg;
+function traduzErro(msg: string, status?: number): string {
+  const texto = (msg || "").trim();
+  if (/invalid login credentials/i.test(texto)) return "E-mail ou senha incorretos.";
+  if (/already registered|already exists/i.test(texto)) return "Este e-mail já está cadastrado.";
+  if (/password should be at least/i.test(texto)) return "A senha precisa ter pelo menos 6 caracteres.";
+  if (/email not confirmed/i.test(texto)) return "Confirme teu e-mail antes de entrar.";
+  if (/rate limit|too many/i.test(texto)) return "Muitas tentativas. Espera um minuto e tenta de novo.";
+  if (/failed to fetch|network/i.test(texto))
+    return "Não consegui falar com o servidor. Verifica tua conexão e tenta novamente.";
+  // Erro interno do servidor de autenticação: a mensagem costuma vir vazia ("{}").
+  if (status && status >= 500) {
+    return "O servidor de autenticação falhou (erro 500). Isso costuma ser um problema na conta do lado do servidor, não na tua senha.";
+  }
+  // Nunca mostrar um objeto vazio ou texto sem sentido para o usuário.
+  if (!texto || texto === "{}" || texto === "[]") {
+    return "Não consegui completar o login agora. Tenta novamente em instantes.";
+  }
+  return texto;
 }
 
 export function useStore(): StoreValue {
