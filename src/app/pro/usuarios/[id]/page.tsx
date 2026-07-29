@@ -12,6 +12,7 @@ import {
   STRATEGY_CATEGORY_LABELS,
   LIFE_IMPACT_DIMENSIONS,
 } from "@/lib/labels";
+import { useAiReport } from "@/lib/useAiReport";
 import type { RiskStatus, StrategyCategory } from "@/lib/types";
 
 const TABS = [
@@ -480,8 +481,7 @@ function CopingCardTab({ userId }: { userId: string }) {
 }
 
 function Reports({ userId }: { userId: string }) {
-  const store = useStore();
-  const report = store.weeklyReportFor(userId);
+  const { report, source } = useAiReport(userId);
   return (
     <div className="space-y-4">
       <Card>

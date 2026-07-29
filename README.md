@@ -111,6 +111,22 @@ em modo demo não precisa de variáveis de ambiente.
 > O ESLint não bloqueia o build (`next.config.mjs` → `eslint.ignoreDuringBuilds: true`),
 > mas a **checagem de tipos do TypeScript continua ativa** no build.
 
+## 3.2. Variáveis de ambiente na Vercel (produção)
+
+Adicione em *Project Settings → Environment Variables*:
+
+| Variável | Valor | Exposta ao navegador? |
+|---|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` | `https://roaeetcygyfwvlaqbwyr.supabase.co` | Sim (é público) |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | chave *publishable* do projeto | Sim (é público) |
+| `AI_PROVIDER` | `openai` | Não |
+| `OPENAI_API_KEY` | tua chave secreta da OpenAI | **Não — secreta** |
+| `AI_MODEL` | `gpt-4o` | Não |
+
+Com as duas primeiras, o site passa a usar **login real e banco de dados**.
+Sem elas, continua em modo demo. `OPENAI_API_KEY` nunca deve levar o prefixo
+`NEXT_PUBLIC_` (isso a exporia no navegador).
+
 ## 4. Configurar o provedor de IA
 
 A IA é acessada por uma camada abstrata (`src/lib/ai/provider.ts`):

@@ -3,13 +3,14 @@
 import { useStore } from "@/lib/store";
 import { Card, SectionTitle, EmptyState } from "@/components/ui";
 import { trendMessage } from "@/lib/consistency";
+import { useAiReport } from "@/lib/useAiReport";
 
 export default function AprendizadosPage() {
   const store = useStore();
   const userId = store.currentUserId!;
   const patterns = store.patternsFor(userId);
   const consistency = store.consistencyFor(userId);
-  const report = store.weeklyReportFor(userId);
+  const { report } = useAiReport(userId);
 
   const hasData =
     patterns.hardestTimeWindow ||

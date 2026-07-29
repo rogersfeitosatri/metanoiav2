@@ -73,10 +73,23 @@ function extractJson(text: string): string {
 
 export function getProvider(): AIProvider {
   const provider = process.env.AI_PROVIDER || "local";
+  if (provider === "openai" && process.env.OPENAI_API_KEY) {
+    // Import dinâmico para não exigir o módulo quando não usado.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { OpenAIProvider } = require("./openai-provider");
+    return new OpenAIProvider(process.env.OPENAI_API_KEY);
+  }
   if (provider === "anthropic" && process.env.ANTHROPIC_API_KEY) {
     return new AnthropicProvider(process.env.ANTHROPIC_API_KEY);
   }
   return new LocalProvider();
+}
+
+export function isLlmConfigured(): boolean {
+  const p = process.env.AI_PROVIDER || "local";
+  if (p === "openai") return Boolean(process.env.OPENAI_API_KEY);
+  if (p === "anthropic") return Boolean(process.env.ANTHROPIC_API_KEY);
+  return false;
 }
 
 // Reexport para consumidores.

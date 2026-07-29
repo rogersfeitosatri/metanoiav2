@@ -71,3 +71,11 @@ export const ConversationSummarySchema = z.object({
   summary: z.string(),
 });
 export type ConversationSummary = z.infer<typeof ConversationSummarySchema>;
+
+// Resposta conversacional livre (aberta), acolhedora e curta.
+export const ChatReplySchema = z.object({
+  reply: z.string(),
+  quick_replies: z.array(z.string()).max(4).optional(),
+  suggest_close: z.boolean().optional(),
+});
+export type ChatReply = z.infer<typeof ChatReplySchema>;
