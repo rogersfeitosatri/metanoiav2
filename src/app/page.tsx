@@ -45,10 +45,8 @@ export default function Home() {
 
 function AuthForm() {
   const store = useStore();
-  const [tab, setTab] = useState<"in" | "up">("in");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -56,44 +54,13 @@ function AuthForm() {
     e.preventDefault();
     setBusy(true);
     setMsg(null);
-    if (tab === "in") {
-      const { error } = await store.signIn(email.trim(), password);
-      if (error) setMsg(error);
-    } else {
-      const { error } = await store.signUp(email.trim(), password, name.trim() || email.split("@")[0]);
-      if (error) setMsg(error);
-      else setMsg("Conta criada! Se pedir confirmação, verifica teu e-mail. Depois é só entrar.");
-    }
+    const { error } = await store.signIn(email.trim(), password);
+    if (error) setMsg(error);
     setBusy(false);
   }
 
   return (
     <form onSubmit={submit} className="space-y-3">
-      <div className="flex rounded-xl bg-warmgray-100 p-1 text-sm">
-        <button
-          type="button"
-          className={`flex-1 rounded-lg py-2 font-medium ${tab === "in" ? "bg-white text-sage-800 shadow-soft" : "text-warmgray-500"}`}
-          onClick={() => setTab("in")}
-        >
-          Entrar
-        </button>
-        <button
-          type="button"
-          className={`flex-1 rounded-lg py-2 font-medium ${tab === "up" ? "bg-white text-sage-800 shadow-soft" : "text-warmgray-500"}`}
-          onClick={() => setTab("up")}
-        >
-          Criar conta
-        </button>
-      </div>
-
-      {tab === "up" && (
-        <input
-          className="input"
-          placeholder="Como tu prefere ser chamado?"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-        />
-      )}
       <input
         className="input"
         type="email"
@@ -110,11 +77,14 @@ function AuthForm() {
         value={password}
         onChange={(e) => setPassword(e.target.value)}
         required
-        autoComplete={tab === "in" ? "current-password" : "new-password"}
+        autoComplete="current-password"
       />
       <button className="btn-primary w-full" disabled={busy}>
-        {busy ? "Aguarde…" : tab === "in" ? "Entrar" : "Criar minha conta"}
+        {busy ? "Aguarde…" : "Entrar"}
       </button>
+      <p className="text-center text-xs text-warmgray-400">
+        O acesso é criado pelo profissional responsável.
+      </p>
       {(msg || store.authError) && (
         <p className="rounded-xl bg-sand-100 p-3 text-sm text-warmgray-700">
           {msg || store.authError}

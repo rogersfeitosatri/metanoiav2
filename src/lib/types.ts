@@ -12,6 +12,9 @@ export interface Profile {
   phone?: string | null;
   timezone: string;
   professional_id?: string | null;
+  access_enabled?: boolean;
+  access_starts_at?: string | null;
+  access_ends_at?: string | null;
   onboarding_completed: boolean;
   terms_version?: string | null;
   terms_accepted_at?: string | null;

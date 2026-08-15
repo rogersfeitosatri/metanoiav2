@@ -66,6 +66,7 @@ interface StoreValue {
   // admin
   linkUserToProfessional: (userId: string, professionalId: string) => void;
   logAudit: (action: string, resourceType: string, resourceId: string, metadata?: Record<string, unknown>) => void;
+  refreshDatabase: () => Promise<void>;
   // selectors
   patternsFor: (userId: string) => PatternSummary;
   consistencyFor: (userId: string) => ReturnType<typeof computeConsistency>;
@@ -148,6 +149,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       }
       const profileError = await bootstrapServerProfile();
       if (profileError) {
+        await supabase!.auth.signOut();
         if (active) {
           setAuthError(profileError);
           setDb(emptyDatabase());
@@ -252,6 +254,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     }
     const profileError = await bootstrapServerProfile();
     if (profileError) {
+      await supabaseRef.current.auth.signOut();
       setAuthError(profileError);
       return { error: profileError };
     }
@@ -279,6 +282,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       }
     }
     return {};
+  }, []);
+
+  const refreshDatabase = useCallback(async () => {
+    if (!SB || !supabaseRef.current) return;
+    const data = await loadDatabase(supabaseRef.current);
+    setDb(data);
   }, []);
 
   // ---------- logAudit ----------
@@ -762,6 +771,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     createStrategy,
     linkUserToProfessional,
     logAudit,
+    refreshDatabase,
     patternsFor,
     consistencyFor,
     weeklyReportFor,

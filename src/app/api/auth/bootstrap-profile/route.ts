@@ -57,7 +57,7 @@ export async function POST() {
 
   const { data: existing, error: readError } = await adminClient
     .from("profiles")
-    .select("id, role, full_name, preferred_name")
+    .select("*")
     .eq("id", user.id)
     .maybeSingle();
 
@@ -68,6 +68,32 @@ export async function POST() {
   const emailRole = roleFor(email);
   const role = emailRole === "admin" ? "admin" : ((existing?.role as Role | undefined) ?? "user");
   const now = new Date().toISOString();
+
+  if (!existing && role === "user") {
+    return NextResponse.json(
+      { ok: false, error: "Teu cadastro ainda nao foi liberado pelo administrador." },
+      { status: 403 }
+    );
+  }
+
+  if (existing && role === "user") {
+    const currentTime = Date.now();
+    if (existing.access_enabled === false) {
+      return NextResponse.json({ ok: false, error: "Teu acesso esta pausado." }, { status: 403 });
+    }
+    if (existing.access_starts_at && new Date(existing.access_starts_at).getTime() > currentTime) {
+      return NextResponse.json(
+        { ok: false, error: "Teu periodo de acesso ainda nao comecou." },
+        { status: 403 }
+      );
+    }
+    if (existing.access_ends_at && new Date(existing.access_ends_at).getTime() < currentTime) {
+      return NextResponse.json(
+        { ok: false, error: "Teu periodo de acesso terminou. Fala com o profissional responsavel." },
+        { status: 403 }
+      );
+    }
+  }
 
   const writePayload = {
     role,
