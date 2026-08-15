@@ -16,14 +16,16 @@ export default function RegistrarPage() {
   const [status, setStatus] = useState<CheckinStatus | null>(null);
   const [meal, setMeal] = useState<MealType | "">("");
   const [note, setNote] = useState("");
+  const [checkinId, setCheckinId] = useState<string | null>(null);
 
   function register(s: CheckinStatus) {
     setStatus(s);
-    store.addCheckin({
+    const checkin = store.addCheckin({
       status: s,
       meal_type: meal || null,
       note: note.trim() || null,
     });
+    setCheckinId(checkin.id);
     setPhase("response");
   }
 
@@ -31,7 +33,12 @@ export default function RegistrarPage() {
     return (
       <div className="space-y-3">
         <h1 className="text-xl font-semibold text-sage-800">Vamos entender juntos</h1>
-        <FlowChat flowId="difficulty" conversationType="checkin_followup" title="Entender o que aconteceu" />
+        <FlowChat
+          flowId="difficulty"
+          conversationType="checkin_followup"
+          title="Entender o que aconteceu"
+          onComplete={(answers) => store.recordDifficulty(store.currentUserId!, answers, undefined, checkinId || undefined)}
+        />
       </div>
     );
   }

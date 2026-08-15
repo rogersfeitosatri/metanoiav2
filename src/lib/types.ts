@@ -72,6 +72,9 @@ export interface CopingCard {
   user_id: string;
   desired_identity?: string;
   main_goal?: string;
+  why_it_matters?: string;
+  future_difference?: string;
+  cost_of_no_change?: string;
   life_impacts?: LifeImpacts;
   sabotaging_thoughts?: string[];
   reminder_statement?: string;
@@ -95,12 +98,49 @@ export type CheckinStatus = "completed" | "partial" | "not_completed";
 export interface MealCheckin {
   id: string;
   user_id: string;
+  schedule_id?: string | null;
   meal_type?: MealType | null;
   custom_meal_name?: string | null;
   status: CheckinStatus;
   occurred_at: string;
   note?: string | null;
   created_at: string;
+}
+
+export interface MealSchedule {
+  id: string;
+  user_id: string;
+  name: string;
+  meal_type?: MealType | null;
+  time_of_day: string;
+  days_of_week: number[];
+  reminder_enabled: boolean;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export type MemoryKind =
+  | "fact"
+  | "hypothesis"
+  | "anchor"
+  | "identity"
+  | "protective_factor"
+  | "pattern";
+
+export interface UserMemory {
+  id: string;
+  user_id: string;
+  memory_kind: MemoryKind;
+  topic: string;
+  content: string;
+  source: "user" | "ai" | "system";
+  validation_status: "confirmed" | "proposed" | "rejected";
+  confidence: number;
+  source_conversation_id?: string | null;
+  last_used_at?: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface DifficultyEvent {
@@ -310,6 +350,7 @@ export interface NotificationPreferences {
 export interface ScheduledIntervention {
   id: string;
   user_id: string;
+  meal_schedule_id?: string | null;
   intervention_type: "preventive" | "strategy_followup" | "coping_card" | "weekly_report";
   scheduled_for: string;
   status: "scheduled" | "sent" | "responded" | "cancelled";
@@ -355,6 +396,8 @@ export interface Database {
   professional_user_links: ProfessionalUserLink[];
   behavioral_goals: BehavioralGoal[];
   coping_cards: CopingCard[];
+  meal_schedules: MealSchedule[];
+  user_memories: UserMemory[];
   meal_checkins: MealCheckin[];
   difficulty_events: DifficultyEvent[];
   thought_records: ThoughtRecord[];

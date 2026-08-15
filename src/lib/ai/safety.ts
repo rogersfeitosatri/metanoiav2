@@ -20,14 +20,14 @@ const SIGNALS: Signal[] = [
       /me matar|suic[ií]dio|n[ãa]o quero (mais )?viver|acabar com tudo|me cortar|me machucar|tirar minha vida/i,
     ],
     message:
-      "O que tu está sentindo é sério e importa. Não estás sozinho nisso. Se houver risco à tua segurança agora, procura o CVV pelo 188 (ligação gratuita, 24h) ou o serviço de emergência 192. Vou registrar isso para que o profissional que te acompanha possa te dar suporte.",
+      "O que tu está sentindo é sério e importa. Se houver risco à tua segurança agora, procura o CVV pelo 188 (ligação gratuita, 24h) ou o serviço de emergência 192. Também é importante contatar agora uma pessoa de confiança ou o profissional que te acompanha.",
   },
   {
     category: "vomito",
     severity: "high",
     patterns: [/vomit|coloquei (tudo )?para fora|botei para fora|provoquei v[ôo]mito/i],
     message:
-      "Obrigado por confiar isso aqui. Provocar vômito é uma forma de compensação que costuma trazer sofrimento e riscos à saúde. Isso é algo importante para conversar com o profissional que te acompanha. Vou registrar para que ele possa te apoiar.",
+      "Obrigado por confiar isso aqui. Provocar vômito pode trazer riscos à saúde. É importante procurar o profissional que te acompanha e, se houver mal-estar intenso ou risco imediato, um serviço de urgência.",
   },
   {
     category: "laxante",

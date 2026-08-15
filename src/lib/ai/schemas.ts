@@ -77,5 +77,27 @@ export const ChatReplySchema = z.object({
   reply: z.string(),
   quick_replies: z.array(z.string()).max(4).optional(),
   suggest_close: z.boolean().optional(),
+  memory_updates: z.array(z.object({
+    memory_kind: z.enum(["fact", "hypothesis", "anchor", "identity", "protective_factor", "pattern"]),
+    topic: z.string(),
+    content: z.string(),
+    source: z.enum(["user", "ai", "system"]),
+    validation_status: z.enum(["confirmed", "proposed", "rejected"]),
+    confidence: z.number().min(0).max(1),
+  })).max(3).optional(),
+  difficulty_capture: z.object({
+    ready: z.boolean(),
+    reasons: z.array(z.string()).max(4),
+    situation: z.string().optional(),
+    automatic_thought: z.string().optional(),
+    emotion: z.string().optional(),
+    hunger_intensity: z.number().min(0).max(10).optional(),
+    urge_intensity: z.number().min(0).max(10).optional(),
+    emotional_intensity: z.number().min(0).max(10).optional(),
+  }).optional(),
+  strategy_plan: z.object({
+    title: z.string(),
+    accepted_by_user: z.boolean(),
+  }).optional(),
 });
 export type ChatReply = z.infer<typeof ChatReplySchema>;

@@ -15,8 +15,8 @@ export default function ConversasPage() {
   return (
     <div className="space-y-4">
       <header>
-        <h1 className="text-2xl font-semibold text-sage-800">Conversas</h1>
-        <p className="text-warmgray-600">Podes retomar uma conversa quando quiser.</p>
+        <h1 className="text-2xl font-semibold text-sage-800">Histórico</h1>
+        <p className="text-warmgray-600">O caminho que já construímos juntos.</p>
       </header>
 
       {conversations.length === 0 ? (

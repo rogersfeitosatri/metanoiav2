@@ -17,6 +17,9 @@ import type {
   ProfessionalNote,
   Strategy,
   ProfessionalUserLink,
+  MealSchedule,
+  UserMemory,
+  MemoryKind,
 } from "./types";
 import { buildDemoDatabase, uid, USER_ID, ADMIN_ID } from "./demo-data";
 import { computeConsistency } from "./consistency";
@@ -50,7 +53,8 @@ interface StoreValue {
   recordDifficulty: (
     userId: string,
     answers: Record<string, unknown>,
-    conversationId?: string
+    conversationId?: string,
+    checkinId?: string
   ) => { event: DifficultyEvent; thought: ThoughtRecord };
   saveCopingCard: (userId: string, patch: Partial<CopingCard>) => void;
   createConversation: (userId: string, type: Conversation["type"], title: string) => Conversation;
@@ -58,6 +62,10 @@ interface StoreValue {
   closeConversation: (conversationId: string, summary?: string) => void;
   addStrategyTrial: (input: Partial<StrategyTrial> & { user_id: string; title_snapshot: string }) => StrategyTrial;
   updateStrategyTrial: (id: string, patch: Partial<StrategyTrial>) => void;
+  addMealSchedule: (input: Pick<MealSchedule, "name" | "time_of_day" | "days_of_week" | "reminder_enabled"> & Partial<MealSchedule>) => MealSchedule;
+  updateMealSchedule: (id: string, patch: Partial<MealSchedule>) => void;
+  saveMemory: (input: Pick<UserMemory, "memory_kind" | "topic" | "content"> & Partial<UserMemory>) => UserMemory;
+  updateMemory: (id: string, patch: Partial<UserMemory>) => void;
   runSafety: (userId: string, text: string, conversationId?: string, messageId?: string) => ReturnType<typeof analyzeSafetyLocal>;
   // profissional
   addProfessionalNote: (input: Omit<ProfessionalNote, "id" | "created_at" | "updated_at">) => void;
@@ -83,6 +91,18 @@ export interface OnboardingData {
   support_times: string[];
   first_commitment: string;
   accepted_terms: boolean;
+  why_it_matters?: string;
+  future_difference?: string;
+  cost_of_no_change?: string;
+  desired_identity?: string;
+  reminder_statement?: string;
+  life_impacts?: Record<string, string>;
+  meals?: Array<{
+    name: string;
+    time_of_day: string;
+    days_of_week: number[];
+    reminder_enabled: boolean;
+  }>;
 }
 
 const StoreContext = createContext<StoreValue | null>(null);
@@ -348,6 +368,59 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         created_at: nowIso,
         updated_at: nowIso,
       };
+      const copingCard: CopingCard = {
+        id: genId("card"),
+        user_id: currentUserId,
+        desired_identity: data.desired_identity || undefined,
+        main_goal: data.goal_description,
+        why_it_matters: data.why_it_matters || undefined,
+        future_difference: data.future_difference || undefined,
+        cost_of_no_change: data.cost_of_no_change || undefined,
+        life_impacts: data.life_impacts || {},
+        reminder_statement: data.reminder_statement || undefined,
+        personal_commitment: data.first_commitment || undefined,
+        completed_percentage: 100,
+        created_at: nowIso,
+        updated_at: nowIso,
+      };
+      const memories: UserMemory[] = [
+        memoryRow("fact", "objetivo", data.goal_description),
+        memoryRow("fact", "por_que_importa", data.why_it_matters),
+        memoryRow("identity", "identidade_desejada", data.desired_identity),
+        memoryRow("anchor", "lembrete_pessoal", data.reminder_statement),
+        ...data.hard_moments.map((content) => memoryRow("fact", "momento_dificil", content)),
+        ...data.difficulties.map((content) => memoryRow("fact", "dificuldade", content)),
+      ].filter((memory): memory is UserMemory => Boolean(memory));
+      const schedules: MealSchedule[] = (data.meals || []).map((meal) => ({
+        id: genId("meal"),
+        user_id: currentUserId,
+        name: meal.name,
+        meal_type: null,
+        time_of_day: meal.time_of_day,
+        days_of_week: meal.days_of_week,
+        reminder_enabled: meal.reminder_enabled,
+        active: true,
+        created_at: nowIso,
+        updated_at: nowIso,
+      }));
+
+      function memoryRow(memory_kind: MemoryKind, topic: string, content?: string): UserMemory | null {
+        if (!content?.trim()) return null;
+        return {
+          id: genId("memory"),
+          user_id: currentUserId!,
+          memory_kind,
+          topic,
+          content: content.trim(),
+          source: "user",
+          validation_status: "confirmed",
+          confidence: 1,
+          source_conversation_id: null,
+          last_used_at: null,
+          created_at: nowIso,
+          updated_at: nowIso,
+        };
+      }
       mutate((d) => {
         const p = d.profiles.find((x) => x.id === currentUserId);
         if (p) {
@@ -359,6 +432,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           p.privacy_accepted_at = nowIso;
         }
         d.behavioral_goals.push(goal as never);
+        d.coping_cards.push(copingCard);
+        d.user_memories.push(...memories);
+        d.meal_schedules.push(...schedules);
         d.legal_acceptances.push(acceptance as never);
         const existing = d.notification_preferences.find((n) => n.user_id === currentUserId);
         if (existing) existing.support_times = data.support_times;
@@ -373,6 +449,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         privacy_accepted_at: nowIso,
       });
       sbInsert("behavioral_goals", goal);
+      sbUpsert("coping_cards", copingCard as unknown as Record<string, unknown>, "user_id");
+      for (const memory of memories) sbInsert("user_memories", memory as unknown as Record<string, unknown>);
+      for (const schedule of schedules) sbInsert("meal_schedules", schedule as unknown as Record<string, unknown>);
       if (acceptance.document_id) sbInsert("legal_acceptances", acceptance);
       sbUpsert("notification_preferences", prefsRow, "user_id");
     },
@@ -384,6 +463,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const checkin: MealCheckin = {
         id: genId("chk"),
         user_id: input.user_id || currentUserId || USER_ID,
+        schedule_id: input.schedule_id ?? null,
         meal_type: input.meal_type ?? null,
         custom_meal_name: input.custom_meal_name ?? null,
         status: input.status,
@@ -401,12 +481,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   );
 
   const recordDifficulty: StoreValue["recordDifficulty"] = useCallback(
-    (userId, answers, conversationId) => {
+    (userId, answers, conversationId, checkinId) => {
       const nowIso = new Date().toISOString();
       const event: DifficultyEvent = {
         id: genId("diff"),
         user_id: userId,
-        checkin_id: null,
+        checkin_id: checkinId || null,
         conversation_id: conversationId || null,
         occurred_at: nowIso,
         primary_reason: (answers.reasons as string[])?.[0] || null,
@@ -594,6 +674,76 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     [mutate, sbUpdate]
   );
 
+  const addMealSchedule: StoreValue["addMealSchedule"] = useCallback(
+    (input) => {
+      const nowIso = new Date().toISOString();
+      const schedule: MealSchedule = {
+        id: genId("meal"),
+        user_id: input.user_id || currentUserId || USER_ID,
+        name: input.name.trim(),
+        meal_type: input.meal_type ?? null,
+        time_of_day: input.time_of_day,
+        days_of_week: input.days_of_week,
+        reminder_enabled: input.reminder_enabled,
+        active: input.active ?? true,
+        created_at: nowIso,
+        updated_at: nowIso,
+      };
+      mutate((d) => d.meal_schedules.push(schedule));
+      sbInsert("meal_schedules", schedule as unknown as Record<string, unknown>);
+      return schedule;
+    },
+    [currentUserId, mutate, sbInsert]
+  );
+
+  const updateMealSchedule: StoreValue["updateMealSchedule"] = useCallback(
+    (id, patch) => {
+      const updated = { ...patch, updated_at: new Date().toISOString() };
+      mutate((d) => {
+        const schedule = d.meal_schedules.find((item) => item.id === id);
+        if (schedule) Object.assign(schedule, updated);
+      });
+      sbUpdate("meal_schedules", id, updated as Record<string, unknown>);
+    },
+    [mutate, sbUpdate]
+  );
+
+  const saveMemory: StoreValue["saveMemory"] = useCallback(
+    (input) => {
+      const nowIso = new Date().toISOString();
+      const memory: UserMemory = {
+        id: genId("memory"),
+        user_id: input.user_id || currentUserId || USER_ID,
+        memory_kind: input.memory_kind,
+        topic: input.topic,
+        content: input.content.trim(),
+        source: input.source || "user",
+        validation_status: input.validation_status || "confirmed",
+        confidence: input.confidence ?? 1,
+        source_conversation_id: input.source_conversation_id ?? null,
+        last_used_at: input.last_used_at ?? null,
+        created_at: nowIso,
+        updated_at: nowIso,
+      };
+      mutate((d) => d.user_memories.unshift(memory));
+      sbInsert("user_memories", memory as unknown as Record<string, unknown>);
+      return memory;
+    },
+    [currentUserId, mutate, sbInsert]
+  );
+
+  const updateMemory: StoreValue["updateMemory"] = useCallback(
+    (id, patch) => {
+      const updated = { ...patch, updated_at: new Date().toISOString() };
+      mutate((d) => {
+        const memory = d.user_memories.find((item) => item.id === id);
+        if (memory) Object.assign(memory, updated);
+      });
+      sbUpdate("user_memories", id, updated as Record<string, unknown>);
+    },
+    [mutate, sbUpdate]
+  );
+
   const runSafety: StoreValue["runSafety"] = useCallback(
     (userId, text, conversationId, messageId) => {
       const result = analyzeSafetyLocal(text);
@@ -765,6 +915,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     closeConversation,
     addStrategyTrial,
     updateStrategyTrial,
+    addMealSchedule,
+    updateMealSchedule,
+    saveMemory,
+    updateMemory,
     runSafety,
     addProfessionalNote,
     updateRiskFlag,
@@ -784,7 +938,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 function emptyDatabase(): Database {
   return {
     profiles: [], professionals: [], professional_user_links: [], behavioral_goals: [],
-    coping_cards: [], meal_checkins: [], difficulty_events: [], thought_records: [],
+    coping_cards: [], meal_schedules: [], user_memories: [], meal_checkins: [], difficulty_events: [], thought_records: [],
     conversations: [], conversation_messages: [], strategies: [], strategy_trials: [],
     pattern_snapshots: [], consistency_scores: [], weekly_reports: [], risk_flags: [],
     professional_notes: [], notification_preferences: [], scheduled_interventions: [],
