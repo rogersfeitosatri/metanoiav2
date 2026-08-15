@@ -43,7 +43,7 @@ interface StoreValue {
   authError: string | null;
   // sessão (demo)
   login: (role: Role) => void;
-  logout: () => void;
+  logout: () => Promise<void>;
   // sessão (supabase)
   signIn: (email: string, password: string) => Promise<{ error?: string }>;
   signUp: (email: string, password: string, preferredName: string) => Promise<{ error?: string }>;
@@ -248,14 +248,19 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
     if (SB && supabaseRef.current) {
-      supabaseRef.current.auth.signOut();
-      setCurrentUserId(null);
-      setDb(emptyDatabase());
+      try {
+        await supabaseRef.current.auth.signOut({ scope: "local" });
+      } finally {
+        setCurrentUserId(null);
+        setDb(emptyDatabase());
+        setAuthError(null);
+      }
       return;
     }
     setCurrentUserId(null);
+    setAuthError(null);
     try {
       localStorage.removeItem(SESSION_KEY);
     } catch {

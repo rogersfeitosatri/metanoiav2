@@ -48,9 +48,10 @@ export function PanelShell({
             </span>
             <button
               className="text-warmgray-500 hover:text-warmgray-800"
-              onClick={() => {
-                store.logout();
+              onClick={async () => {
+                await store.logout();
                 router.replace("/");
+                router.refresh();
               }}
             >
               Sair

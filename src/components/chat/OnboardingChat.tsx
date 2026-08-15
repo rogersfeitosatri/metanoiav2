@@ -25,6 +25,7 @@ export function OnboardingChat() {
   const [days, setDays] = useState([0, 1, 2, 3, 4, 5, 6]);
   const [typing, setTyping] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
   const conversationId = useRef<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -103,10 +104,29 @@ export function OnboardingChat() {
     router.push("/app/hoje");
   }
 
+  async function handleLogout() {
+    if (loggingOut) return;
+    setLoggingOut(true);
+    await store.logout();
+    router.replace("/");
+    router.refresh();
+  }
+
   const textSteps = ["difference", "pain", "meaning", "correction", "identity", "impact", "anchor", "meal_name"].includes(step);
   return (
     <main className="mx-auto flex min-h-dvh max-w-2xl flex-col bg-[#fcfbf8] px-4 sm:px-6">
-      <header className="flex h-16 items-center border-b border-warmgray-100"><div><p className="font-semibold text-sage-800">Metanóia</p><p className="text-xs text-warmgray-500">Tua primeira conversa</p></div></header>
+      <header className="flex h-16 items-center justify-between border-b border-warmgray-100">
+        <div><p className="font-semibold text-sage-800">Metanóia</p><p className="text-xs text-warmgray-500">Tua primeira conversa</p></div>
+        <button
+          type="button"
+          className="text-sm font-medium text-warmgray-500 transition-colors hover:text-sage-700 disabled:cursor-wait disabled:opacity-60"
+          onClick={handleLogout}
+          disabled={loggingOut}
+          aria-label="Sair e voltar para o login"
+        >
+          {loggingOut ? "Saindo..." : "Sair"}
+        </button>
+      </header>
       <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto py-6">
         {bubbles.map((bubble, index) => <div key={index} className={`flex ${bubble.from === "user" ? "justify-end" : "justify-start"}`}><div className={bubble.from === "user" ? "chat-bubble-user" : "chat-bubble-assistant"}>{bubble.text}</div></div>)}
         {typing && <div className="chat-bubble-assistant w-fit"><TypingDots /></div>}
