@@ -81,6 +81,7 @@ usar Supabase:
    NEXT_PUBLIC_SUPABASE_URL=...
    NEXT_PUBLIC_SUPABASE_ANON_KEY=...
    SUPABASE_SERVICE_ROLE_KEY=...
+   ADMIN_EMAILS=seu-email-admin@dominio.com
    ```
 3. As políticas de **Row Level Security** (`0002_rls.sql`) já garantem que:
    - o usuário só acessa os próprios dados;
@@ -119,11 +120,15 @@ Adicione em *Project Settings → Environment Variables*:
 |---|---|---|
 | `NEXT_PUBLIC_SUPABASE_URL` | `https://roaeetcygyfwvlaqbwyr.supabase.co` | Sim (é público) |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | chave *publishable* do projeto | Sim (é público) |
+| `SUPABASE_SERVICE_ROLE_KEY` | chave *service_role* do projeto | **Não — secreta** |
+| `ADMIN_EMAILS` | e-mails admin separados por vírgula | Não |
 | `AI_PROVIDER` | `openai` | Não |
 | `OPENAI_API_KEY` | tua chave secreta da OpenAI | **Não — secreta** |
 | `AI_MODEL` | `gpt-4o` | Não |
 
 Com as duas primeiras, o site passa a usar **login real e banco de dados**.
+Com `SUPABASE_SERVICE_ROLE_KEY`, o app cria o perfil correspondente após o login.
+Com `ADMIN_EMAILS`, os e-mails listados recebem `role=admin` automaticamente.
 Sem elas, continua em modo demo. `OPENAI_API_KEY` nunca deve levar o prefixo
 `NEXT_PUBLIC_` (isso a exporia no navegador).
 

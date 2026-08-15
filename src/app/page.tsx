@@ -115,7 +115,11 @@ function AuthForm() {
       <button className="btn-primary w-full" disabled={busy}>
         {busy ? "Aguarde…" : tab === "in" ? "Entrar" : "Criar minha conta"}
       </button>
-      {msg && <p className="rounded-xl bg-sand-100 p-3 text-sm text-warmgray-700">{msg}</p>}
+      {(msg || store.authError) && (
+        <p className="rounded-xl bg-sand-100 p-3 text-sm text-warmgray-700">
+          {msg || store.authError}
+        </p>
+      )}
     </form>
   );
 }

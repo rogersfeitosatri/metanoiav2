@@ -90,6 +90,13 @@ function genId(prefix = "id"): string {
   return SB ? newId() : uid(prefix);
 }
 
+async function bootstrapServerProfile(): Promise<string | null> {
+  const response = await fetch("/api/auth/bootstrap-profile", { method: "POST" });
+  if (response.ok) return null;
+  const data = (await response.json().catch(() => null)) as { error?: string } | null;
+  return data?.error || "Nao consegui preparar teu perfil de acesso.";
+}
+
 function loadLocalDb(): Database {
   if (typeof window === "undefined") return buildDemoDatabase();
   try {
@@ -133,6 +140,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     async function bootstrap(uidStr: string | null) {
       if (!uidStr) {
         if (active) {
+          setDb(emptyDatabase());
+          setCurrentUserId(null);
+          setReady(true);
+        }
+        return;
+      }
+      const profileError = await bootstrapServerProfile();
+      if (profileError) {
+        if (active) {
+          setAuthError(profileError);
           setDb(emptyDatabase());
           setCurrentUserId(null);
           setReady(true);
@@ -233,13 +250,18 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       setAuthError(msg);
       return { error: msg };
     }
+    const profileError = await bootstrapServerProfile();
+    if (profileError) {
+      setAuthError(profileError);
+      return { error: profileError };
+    }
     return {};
   }, []);
 
   const signUp = useCallback<StoreValue["signUp"]>(async (email, password, preferredName) => {
     setAuthError(null);
     if (!supabaseRef.current) return { error: "Supabase não configurado." };
-    const { error } = await supabaseRef.current.auth.signUp({
+    const { data, error } = await supabaseRef.current.auth.signUp({
       email,
       password,
       options: { data: { preferred_name: preferredName, full_name: preferredName } },
@@ -248,6 +270,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const msg = traduzErro(error.message, error.status);
       setAuthError(msg);
       return { error: msg };
+    }
+    if (data.session) {
+      const profileError = await bootstrapServerProfile();
+      if (profileError) {
+        setAuthError(profileError);
+        return { error: profileError };
+      }
     }
     return {};
   }, []);
