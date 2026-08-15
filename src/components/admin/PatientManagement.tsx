@@ -169,7 +169,11 @@ export function PatientManagement() {
         ) : (
           <div className="mt-3 space-y-3">
             {patients.map((patient) => (
-              <PatientAccess key={patient.id} patient={patient} />
+              <PatientAccess
+                key={patient.id}
+                patient={patient}
+                onDeleted={() => setMessage({ kind: "success", text: "Paciente e todos os dados foram excluídos definitivamente." })}
+              />
             ))}
           </div>
         )}
@@ -198,13 +202,16 @@ function formatPeriod(patient: Profile) {
   return `${formatDate(patient.access_starts_at)} ate ${formatDate(patient.access_ends_at)}`;
 }
 
-function PatientAccess({ patient }: { patient: Profile }) {
+function PatientAccess({ patient, onDeleted }: { patient: Profile; onDeleted: () => void }) {
   const store = useStore();
   const [editing, setEditing] = useState(false);
   const [accessEnabled, setAccessEnabled] = useState(patient.access_enabled !== false);
   const [accessStartsOn, setAccessStartsOn] = useState(() => profileDate(patient.access_starts_at, 0));
   const [accessEndsOn, setAccessEndsOn] = useState(() => profileDate(patient.access_ends_at, 30));
   const [saving, setSaving] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState("");
   const status = accessStatus(patient);
 
@@ -226,6 +233,27 @@ function PatientAccess({ patient }: { patient: Profile }) {
       setError(caught instanceof Error ? caught.message : "Nao foi possivel atualizar o acesso.");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function deletePatient() {
+    if (deleteConfirmation !== "EXCLUIR") return;
+    setDeleting(true);
+    setError("");
+
+    try {
+      const response = await fetch("/api/admin/patients", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ patientId: patient.id, confirmation: deleteConfirmation }),
+      });
+      if (!response.ok) throw new Error(await responseError(response, "Não foi possível excluir o paciente."));
+
+      await store.refreshDatabase();
+      onDeleted();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Não foi possível excluir o paciente.");
+      setDeleting(false);
     }
   }
 
@@ -269,6 +297,56 @@ function PatientAccess({ patient }: { patient: Profile }) {
             <button className="btn-primary w-full md:w-auto" type="button" onClick={saveAccess} disabled={saving}>
               {saving ? "Salvando..." : "Salvar acesso"}
             </button>
+          </div>
+
+          <div className="md:col-span-3 border-t border-rose-200 pt-4">
+            {!confirmingDelete ? (
+              <button
+                className="text-sm font-medium text-rose-700 underline"
+                type="button"
+                onClick={() => setConfirmingDelete(true)}
+              >
+                Excluir paciente definitivamente
+              </button>
+            ) : (
+              <div className="rounded-lg border border-rose-200 bg-rose-50 p-4">
+                <p className="font-semibold text-rose-800">Esta ação não pode ser desfeita.</p>
+                <p className="mt-1 text-sm leading-relaxed text-rose-700">
+                  O login de {patient.full_name} e todos os dados serão apagados: conversas,
+                  check-ins, Meu Norte, memórias, estratégias, vínculos e histórico.
+                </p>
+                <label className="mt-3 block">
+                  <span className="label text-rose-800">Digite EXCLUIR para confirmar</span>
+                  <input
+                    className="input border-rose-300"
+                    value={deleteConfirmation}
+                    onChange={(event) => setDeleteConfirmation(event.target.value.toUpperCase())}
+                    autoComplete="off"
+                  />
+                </label>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    className="btn bg-rose-700 text-white hover:bg-rose-800"
+                    type="button"
+                    disabled={deleteConfirmation !== "EXCLUIR" || deleting}
+                    onClick={deletePatient}
+                  >
+                    {deleting ? "Excluindo..." : "Excluir tudo definitivamente"}
+                  </button>
+                  <button
+                    className="btn-ghost"
+                    type="button"
+                    disabled={deleting}
+                    onClick={() => {
+                      setConfirmingDelete(false);
+                      setDeleteConfirmation("");
+                    }}
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

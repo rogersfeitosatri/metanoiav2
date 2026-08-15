@@ -24,6 +24,11 @@ const updateAccessSchema = accessSchema.and(
   z.object({ patientId: z.string().uuid(), accessEnabled: z.boolean() })
 );
 
+const deletePatientSchema = z.object({
+  patientId: z.string().uuid(),
+  confirmation: z.literal("EXCLUIR"),
+});
+
 type AdminContext = { adminClient: SupabaseClient; adminId: string };
 
 async function requireAdmin(): Promise<AdminContext | { response: NextResponse }> {
@@ -171,6 +176,41 @@ export async function PATCH(request: Request) {
     resource_id: patientId,
     metadata: { accessEnabled, accessStartsOn, accessEndsOn },
   });
+
+  return NextResponse.json({ ok: true });
+}
+
+export async function DELETE(request: Request) {
+  const context = await requireAdmin();
+  if ("response" in context) return context.response;
+
+  const parsed = deletePatientSchema.safeParse(await request.json().catch(() => null));
+  if (!parsed.success) {
+    return NextResponse.json({ error: "Confirmação de exclusão inválida." }, { status: 400 });
+  }
+
+  const { patientId } = parsed.data;
+  if (patientId === context.adminId) {
+    return NextResponse.json({ error: "A conta administrativa não pode ser excluída por esta tela." }, { status: 400 });
+  }
+
+  const { data: patient, error: patientError } = await context.adminClient
+    .from("profiles")
+    .select("id, role")
+    .eq("id", patientId)
+    .maybeSingle();
+  if (patientError || patient?.role !== "user") {
+    return NextResponse.json({ error: "Paciente não encontrado." }, { status: 404 });
+  }
+
+  // A FK profiles -> auth.users e os ON DELETE CASCADE removem os dados em uma unica operacao.
+  const { error } = await context.adminClient.auth.admin.deleteUser(patientId);
+  if (error) {
+    return NextResponse.json(
+      { error: `Não foi possível excluir definitivamente: ${error.message}` },
+      { status: 500 }
+    );
+  }
 
   return NextResponse.json({ ok: true });
 }
