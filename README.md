@@ -118,7 +118,7 @@ Adicione em *Project Settings → Environment Variables*:
 
 | Variável | Valor | Exposta ao navegador? |
 |---|---|---|
-| `NEXT_PUBLIC_SUPABASE_URL` | `https://roaeetcygyfwvlaqbwyr.supabase.co` | Sim (é público) |
+| `NEXT_PUBLIC_SUPABASE_URL` | `https://ojrqbmayuimfzwlvxnei.supabase.co` | Sim (é público) |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | chave *publishable* do projeto | Sim (é público) |
 | `SUPABASE_SERVICE_ROLE_KEY` | chave *service_role* do projeto | **Não — secreta** |
 | `ADMIN_EMAILS` | e-mails admin separados por vírgula | Não |
