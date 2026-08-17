@@ -12,20 +12,20 @@ export type OnboardingField = "difference" | "pain" | "meaning" | "identity" | "
 // Roteiro de segurança: é exatamente o que o app usava antes da IA.
 // Se não houver chave, ou se a chamada falhar, o cadastro segue por aqui.
 const FALLBACK: Record<OnboardingField, string> = {
-  difference: "O que tu espera que mude na tua vida ao avançar nesse objetivo?",
-  pain: "E hoje, o que mais pesa ou te cansa nessa relação com a alimentação?",
-  meaning: "Se isso começasse a melhorar, o que ficaria diferente na tua vida, além do peso?",
-  identity: "Quando o peso não estiver decidindo teu valor, quem tu quer ser no cuidado contigo?",
-  anchor: "Quando vier um momento difícil, que frase tua poderia te lembrar desse Norte?",
+  difference: "E se isso acontecesse, o que mudaria no teu dia a dia?",
+  pain: "E hoje, o que mais te incomoda nisso?",
+  meaning: "Tira o peso da conta por um segundo. O que mais mudaria?",
+  identity: "Como tu queria se sentir contigo daqui pra frente?",
+  anchor: "Última coisa: que frase tu diria pra ti num momento difícil?",
 };
 
 // Quando a pessoa trava, reformulamos por outro caminho em vez de repetir igual.
 const REPHRASE: Record<OnboardingField, string> = {
-  difference: "Deixa eu tentar de outro jeito: imagina que já deu certo. O que estaria diferente num dia comum teu?",
-  pain: "Pensa num dia recente em que isso te incomodou. O que aconteceu?",
-  meaning: "Sem pensar em peso: o que tu ganharia com isso, no dia a dia?",
-  identity: "Se um amigo teu descrevesse como tu cuida de ti daqui a um ano, o que tu queria que ele dissesse?",
-  anchor: "Não precisa ser bonito. Que frase tu diria pra ti mesmo num momento difícil?",
+  difference: "Deixa eu tentar de outro jeito: imagina que já deu certo. Como seria um dia teu?",
+  pain: "Pensa num dia recente que te incomodou. O que rolou?",
+  meaning: "Sem falar de peso: o que tu ganharia com isso?",
+  identity: "Se um amigo teu falasse de ti daqui a um ano, o que tu queria ouvir?",
+  anchor: "Não precisa ser bonito. O que tu diria pra ti mesmo?",
 };
 
 interface Body {

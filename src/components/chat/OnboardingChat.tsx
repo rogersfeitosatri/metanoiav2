@@ -12,7 +12,7 @@ type Bubble = { from: "assistant" | "user"; text: string };
 
 const GOALS = ["Emagrecer", "Manter o peso", "Sair do efeito sanfona", "Outro objetivo"];
 const DAYS = ["D", "S", "T", "Q", "Q", "S", "S"];
-const INITIAL = "Antes de começarmos, quero entender o que tu espera encontrar aqui. Qual destes objetivos mais se aproxima do teu momento?";
+const INITIAL = "Oi! Antes de tudo: o que te trouxe até aqui?";
 
 // Ordem dos pontos explorados pela IA. A IA escolhe as PALAVRAS; a ordem é nossa,
 // para o Meu Norte sempre sair completo.
@@ -107,7 +107,7 @@ export function OnboardingChat() {
       void askAI(proximo, value, next);
     } else {
       setStep("impact_area");
-      persist("assistant", "Em qual parte da vida tu sentiria essa mudança primeiro?", "impact_area", LIFE_IMPACT_DIMENSIONS.map((d) => d.label));
+      persist("assistant", "Onde tu sentiria isso primeiro?", "impact_area", LIFE_IMPACT_DIMENSIONS.map((d) => d.label));
     }
   }
 
@@ -136,7 +136,7 @@ export function OnboardingChat() {
       // Antes de seguir, devolvemos a síntese como HIPÓTESE, para ela confirmar.
       ask("hypothesis", hypothesisFor(next), ["Faz sentido", "Mais ou menos", "Não é bem isso"]);
     } else if (step === "anchor") {
-      answer("anchor", value, "meal_name", "Agora vamos combinar os momentos em que eu posso estar por perto. Qual refeição tu quer cadastrar primeiro?");
+      answer("anchor", value, "meal_name", "Agora me diz: qual refeição tu quer que eu acompanhe primeiro?");
     } else if (step === "correction") {
       const next = { ...answers, meaning: value };
       setAnswers(next); persist("user", value, step); setDraft("");
@@ -150,9 +150,9 @@ export function OnboardingChat() {
       setDraft("");
       const restantes = LIFE_IMPACT_DIMENSIONS.filter((d) => !next[d.key]);
       if (restantes.length === 0 || Object.keys(next).length >= 3) {
-        ask("anchor", "Quando vier um momento difícil, que frase tua poderia te lembrar desse Norte?");
+        ask("anchor", "Última coisa: que frase tu diria pra ti num momento difícil?");
       } else {
-        ask("impact_more", "Tem outra área onde tu sentiria essa diferença?", [...restantes.map((d) => d.label), "Só essa por enquanto"]);
+        ask("impact_more", "Tem mais alguma área?", [...restantes.map((d) => d.label), "Só essa por enquanto"]);
       }
     }
     
@@ -173,14 +173,14 @@ export function OnboardingChat() {
     } else if (step === "impact_area" || step === "impact_more") {
       if (value === "Só essa por enquanto") {
         persist("user", value, step);
-        ask("anchor", "Quando vier um momento difícil, que frase tua poderia te lembrar desse Norte?");
+        ask("anchor", "Última coisa: que frase tu diria pra ti num momento difícil?");
         return;
       }
       const dim = LIFE_IMPACT_DIMENSIONS.find((d) => d.label === value);
       areaRef.current = dim?.key || "geral";
       persist("user", value, step);
       ask("impact", dim ? dim.prompt : "O que mudaria nessa parte da vida?");
-    } else if (step === "reminder") { setAnswers((current) => ({ ...current, reminder: value })); persist("user", value, step); ask("terms", "Antes de seguir, preciso da tua autorização para guardar estas conversas e usá-las no teu acompanhamento."); }
+    } else if (step === "reminder") { setAnswers((current) => ({ ...current, reminder: value })); persist("user", value, step); ask("terms", "Por último: preciso da tua autorização para guardar estas conversas e usar no teu acompanhamento."); }
   }
 
   function finish() {
@@ -247,4 +247,4 @@ export function OnboardingChat() {
 
 function Choices({ options, onChoose }: { options: string[]; onChoose: (value: string) => void }) { return <div className="flex flex-wrap gap-2">{options.map((option) => <button key={option} className="chip" onClick={() => onChoose(option)}>{option}</button>)}</div>; }
 function lowerFirst(value: string) { const clean = value.trim().replace(/[.!?]+$/, ""); return clean ? clean.charAt(0).toLowerCase() + clean.slice(1) : clean; }
-function hypothesisFor(answers: Record<string, string>) { return `Deixa eu ver se entendi: para ti, ${(answers.goal || "mudar").toLowerCase()} parece ser uma parte do caminho, mas o que realmente importa é ${lowerFirst(answers.meaning || answers.difference || "ter mais tranquilidade")}. Faz sentido ou viajei?`; }
+function hypothesisFor(answers: Record<string, string>) { return `Deixa eu ver se entendi: ${(answers.goal || "mudar").toLowerCase()} é parte do caminho, mas o que importa mesmo é ${lowerFirst(answers.meaning || answers.difference || "ter mais tranquilidade")}. Faz sentido ou viajei?`; }
