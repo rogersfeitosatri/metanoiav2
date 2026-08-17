@@ -1,6 +1,7 @@
-import { redirect } from "next/navigation";
+"use client";
 
-// Área reorganizada: a experiência central agora é a Conversa.
-export default function Page() {
-  redirect("/app/conversa");
+import { ConversationHome } from "@/components/chat/ConversationHome";
+
+export default function HojePage() {
+  return <ConversationHome />;
 }

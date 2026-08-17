@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useStore } from "@/lib/store";
 import { Card, SectionTitle, EmptyState } from "@/components/ui";
+import { PatientManagement } from "@/components/admin/PatientManagement";
 import { RISK_CATEGORY_LABELS } from "@/lib/labels";
 
 const TABS = ["Métricas", "Profissionais", "Usuários", "Vínculos", "Termos", "Alertas críticos", "Logs"] as const;
@@ -101,25 +102,7 @@ function Professionals() {
 }
 
 function Users() {
-  const store = useStore();
-  const users = store.db.profiles.filter((p) => p.role === "user");
-  return (
-    <div className="space-y-2">
-      {users.map((u) => (
-        <Card key={u.id} className="flex items-center justify-between py-3">
-          <div>
-            <p className="font-medium text-warmgray-800">{u.full_name}</p>
-            <p className="text-sm text-warmgray-500">
-              {u.email} · termos v{u.terms_version || "—"}
-            </p>
-          </div>
-          <span className="text-xs text-warmgray-400">
-            {u.onboarding_completed ? "onboarding ok" : "pendente"}
-          </span>
-        </Card>
-      ))}
-    </div>
-  );
+  return <PatientManagement />;
 }
 
 function Links() {

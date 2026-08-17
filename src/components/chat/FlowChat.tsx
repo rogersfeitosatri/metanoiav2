@@ -192,7 +192,7 @@ export function FlowChat({
         {(finished || interrupted) && (
           <div className="pt-2 text-center text-sm text-warmgray-500">
             {interrupted
-              ? "Conversa registrada. O profissional que te acompanha foi avisado."
+              ? "Interrompi a conversa comum para priorizar tua segurança. Procura apoio humano agora."
               : "Conversa encerrada por agora."}
           </div>
         )}

@@ -53,6 +53,12 @@ body {
   .input {
     @apply w-full rounded-xl border border-warmgray-200 bg-white px-4 py-3 text-warmgray-800 placeholder:text-warmgray-400 focus:border-teal-400;
   }
+  .chat-bubble-assistant {
+    @apply max-w-[86%] rounded-lg rounded-bl-sm border border-warmgray-100 bg-white px-4 py-3 leading-relaxed text-warmgray-700 shadow-soft;
+  }
+  .chat-bubble-user {
+    @apply max-w-[86%] rounded-lg rounded-br-sm bg-sage-600 px-4 py-3 leading-relaxed text-white;
+  }
 }
 
 /* Barra de digitação */

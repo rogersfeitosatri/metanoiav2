@@ -37,7 +37,7 @@ src/
       schemas.ts             # schemas Zod para saídas estruturadas da IA
     __tests__/               # testes unitários (vitest)
   prompts/index.ts           # prompts modulares por função (uso em produção)
-supabase/migrations/         # 0001_schema.sql, 0002_rls.sql, 0003_seed.sql
+supabase/migrations/         # 0001_schema.sql ate 0004_patient_access.sql
 ```
 
 ### Áreas do app do usuário
@@ -73,7 +73,7 @@ O app roda por padrão em `NEXT_PUBLIC_DATA_MODE=demo`, sem serviços externos. 
 usar Supabase:
 
 1. Crie um projeto no Supabase e rode as migrations em `supabase/migrations/` na ordem:
-   `0001_schema.sql` → `0002_rls.sql` → `0003_seed.sql`
+   `0001_schema.sql` → `0002_rls.sql` → `0003_seed.sql` → `0004_patient_access.sql`
    (via `supabase db push` ou colando no SQL Editor).
 2. Preencha em `.env.local`:
    ```
@@ -81,6 +81,7 @@ usar Supabase:
    NEXT_PUBLIC_SUPABASE_URL=...
    NEXT_PUBLIC_SUPABASE_ANON_KEY=...
    SUPABASE_SERVICE_ROLE_KEY=...
+   ADMIN_EMAILS=seu-email-admin@dominio.com
    ```
 3. As políticas de **Row Level Security** (`0002_rls.sql`) já garantem que:
    - o usuário só acessa os próprios dados;
@@ -117,13 +118,17 @@ Adicione em *Project Settings → Environment Variables*:
 
 | Variável | Valor | Exposta ao navegador? |
 |---|---|---|
-| `NEXT_PUBLIC_SUPABASE_URL` | `https://roaeetcygyfwvlaqbwyr.supabase.co` | Sim (é público) |
+| `NEXT_PUBLIC_SUPABASE_URL` | `https://ojrqbmayuimfzwlvxnei.supabase.co` | Sim (é público) |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | chave *publishable* do projeto | Sim (é público) |
+| `SUPABASE_SERVICE_ROLE_KEY` | chave *service_role* do projeto | **Não — secreta** |
+| `ADMIN_EMAILS` | e-mails admin separados por vírgula | Não |
 | `AI_PROVIDER` | `openai` | Não |
 | `OPENAI_API_KEY` | tua chave secreta da OpenAI | **Não — secreta** |
 | `AI_MODEL` | `gpt-4o` | Não |
 
 Com as duas primeiras, o site passa a usar **login real e banco de dados**.
+Com `SUPABASE_SERVICE_ROLE_KEY`, o app cria o perfil correspondente após o login.
+Com `ADMIN_EMAILS`, os e-mails listados recebem `role=admin` automaticamente.
 Sem elas, continua em modo demo. `OPENAI_API_KEY` nunca deve levar o prefixo
 `NEXT_PUBLIC_` (isso a exporia no navegador).
 
@@ -151,6 +156,7 @@ resultados e alertas (seção 25).
 | `supabase/migrations/0001_schema.sql` | Todas as tabelas da seção 26, enums, índices, FKs e constraints |
 | `supabase/migrations/0002_rls.sql` | Funções auxiliares e políticas de RLS por tabela |
 | `supabase/migrations/0003_seed.sql` | Estratégias globais e documentos legais (não sensível) |
+| `supabase/migrations/0004_patient_access.sql` | Período de acesso dos pacientes e bloqueio por RLS |
 
 Tabelas: `profiles, professionals, professional_user_links, behavioral_goals,
 coping_cards, meal_checkins, difficulty_events, thought_records, conversations,

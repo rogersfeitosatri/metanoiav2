@@ -1,7 +1,6 @@
-"use client";
+import { redirect } from "next/navigation";
 
-import { Conversa } from "@/components/chat/Conversa";
-
-export default function ConversaPage() {
-  return <Conversa />;
+// A Conversa vive em /app/hoje (ConversationHome).
+export default function Page() {
+  redirect("/app/hoje");
 }

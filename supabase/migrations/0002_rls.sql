@@ -3,22 +3,44 @@
 
 -- Funções auxiliares -------------------------------------------------
 create or replace function current_role_is(target role)
-returns boolean language sql stable as $$
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
   select exists (select 1 from profiles where id = auth.uid() and role = target);
 $$;
 
-create or replace function is_admin() returns boolean language sql stable as $$
+create or replace function is_admin()
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
   select current_role_is('admin');
 $$;
 
 -- Retorna o professionals.id do usuário logado (se profissional).
-create or replace function my_professional_id() returns uuid language sql stable as $$
+create or replace function my_professional_id()
+returns uuid
+language sql
+stable
+security definer
+set search_path = public
+as $$
   select p.id from professionals p where p.profile_id = auth.uid();
 $$;
 
 -- Verdadeiro se o usuário logado é o profissional vinculado (ativo) do user alvo.
 create or replace function is_linked_professional(target_user uuid)
-returns boolean language sql stable as $$
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
   select exists (
     select 1 from professional_user_links l
     where l.user_id = target_user
