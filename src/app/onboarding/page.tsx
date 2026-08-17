@@ -81,7 +81,7 @@ export default function OnboardingPage() {
         result: "not_tested",
       });
     }
-    router.push("/app/hoje");
+    router.push("/app/conversa");
   }
 
   return (

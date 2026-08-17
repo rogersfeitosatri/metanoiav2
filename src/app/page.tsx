@@ -18,7 +18,7 @@ export default function Home() {
   function redirectFor(role: Role, onboarded: boolean) {
     if (role === "professional") router.push("/pro");
     else if (role === "admin") router.push("/admin");
-    else router.push(onboarded ? "/app/hoje" : "/onboarding");
+    else router.push(onboarded ? "/app/conversa" : "/onboarding");
   }
 
   return (
@@ -131,7 +131,7 @@ function DemoEntry() {
       else if (role === "admin") router.push("/admin");
       else {
         const p = store.db.profiles.find((x) => x.role === "user");
-        router.push(p?.onboarding_completed ? "/app/hoje" : "/onboarding");
+        router.push(p?.onboarding_completed ? "/app/conversa" : "/onboarding");
       }
     }, 30);
   }

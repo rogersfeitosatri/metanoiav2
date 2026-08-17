@@ -115,6 +115,15 @@ export interface DifficultyEvent {
   created_at: string;
 }
 
+// Como a pessoa lidou com o que aconteceu — é isto que o Metanoia mede,
+// não se ela "seguiu a dieta".
+export type RecoveryOutcome =
+  | "retomou"              // continuou normalmente na próxima refeição
+  | "retomou_depois"       // levou um tempo, mas retomou
+  | "abandonou_dia"        // deixou aquilo virar o restante do dia
+  | "compensou"            // pulou refeição, restringiu, exercício punitivo
+  | "indefinido";
+
 export interface ThoughtRecord {
   id: string;
   user_id: string;
@@ -126,7 +135,49 @@ export interface ThoughtRecord {
   consequences?: string;
   decision_point?: string;
   alternative_thought?: string;
+  // --- v2: habilidades e desfecho ---
+  /** A pessoa nomeou o pensamento sozinha (true) ou precisou de exemplos (false). */
+  thought_self_identified?: boolean;
+  /** A pessoa nomeou a emoção sozinha. */
+  emotion_self_identified?: boolean;
+  /** Fome percebida de 0 a 10 no momento (sinal corporal). */
+  hunger_level?: number | null;
+  /** Percebeu a fome antes de chegar ao limite. */
+  noticed_hunger_early?: boolean;
+  /** Presença de pensamento tudo-ou-nada ("já estraguei tudo"). */
+  all_or_nothing?: boolean;
+  /** Intensidade da culpa relatada, 0 a 10. */
+  guilt_level?: number | null;
+  /** Como a pessoa lidou depois. */
+  recovery_outcome?: RecoveryOutcome;
   created_at: string;
+}
+
+// Acompanhamento de um pensamento alternativo: ele mudou o comportamento
+// quando a situação parecida voltou a acontecer?
+export type AltThoughtResult =
+  | "pending"              // ainda não houve situação parecida
+  | "helped_changed"       // pensou diferente e agiu diferente
+  | "thought_only"         // pensou diferente, mas agiu como antes
+  | "did_not_use"          // não lembrou de usar
+  | "did_not_help";        // usou e não mudou nada
+
+export interface AlternativeThought {
+  id: string;
+  user_id: string;
+  thought_record_id?: string | null;
+  /** O pensamento automático original. */
+  original_thought: string;
+  /** A resposta alternativa construída pela própria pessoa. */
+  alternative: string;
+  /** Quanto a pessoa acredita nela, 0 a 10 (no momento em que construiu). */
+  belief_level?: number | null;
+  result: AltThoughtResult;
+  /** Quantas vezes essa resposta foi retomada em situações parecidas. */
+  times_used: number;
+  last_used_at?: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export type ConversationType =
@@ -355,6 +406,7 @@ export interface Database {
   meal_checkins: MealCheckin[];
   difficulty_events: DifficultyEvent[];
   thought_records: ThoughtRecord[];
+  alternative_thoughts: AlternativeThought[];
   conversations: Conversation[];
   conversation_messages: ConversationMessage[];
   strategies: Strategy[];

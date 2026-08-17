@@ -176,10 +176,18 @@ function buildCheckins(): MealCheckin[] {
 
 function buildDifficulties(): { difficulties: DifficultyEvent[]; thoughts: ThoughtRecord[] } {
   const specs = [
-    { d: 1, reasons: ["Estava com muita fome.", "Não tinha o alimento planejado."], thought: "Já estraguei tudo.", emotion: "Ansiedade", intensity: 7 },
-    { d: 2, reasons: ["Comi por impulso.", "Tive vontade de doce."], thought: "Eu mereço.", emotion: "Cansaço", intensity: 6 },
-    { d: 5, reasons: ["Estava estressado ou irritado.", "Não tive tempo."], thought: "Depois eu compenso.", emotion: "Estresse", intensity: 8 },
-    { d: 9, reasons: ["Tive vontade de doce.", "Pensei que já tinha estragado o dia."], thought: "Já estraguei tudo.", emotion: "Frustração", intensity: 6 },
+    // Semana atual (últimos 7 dias) — mostra habilidades em desenvolvimento.
+    { d: 1, reasons: ["Estava com muita fome.", "Não tinha o alimento planejado."], thought: "Já estraguei tudo.", emotion: "Ansiedade", intensity: 7,
+      hunger: 9, early: false, selfThought: true, allOrNothing: true, recovery: "retomou" as const, guilt: 6 },
+    { d: 3, reasons: ["Comi por impulso.", "Tive vontade de doce."], thought: "Eu mereço.", emotion: "Cansaço", intensity: 6,
+      hunger: 5, early: true, selfThought: true, allOrNothing: false, recovery: "retomou" as const, guilt: 3 },
+    { d: 6, reasons: ["Estava estressado ou irritado.", "Não tive tempo."], thought: "Já estraguei tudo.", emotion: "Estresse", intensity: 8,
+      hunger: 7, early: false, selfThought: false, allOrNothing: true, recovery: "abandonou_dia" as const, guilt: 8 },
+    // Semana anterior — base de comparação (antes retomava menos).
+    { d: 9, reasons: ["Tive vontade de doce.", "Pensei que já tinha estragado o dia."], thought: "Já estraguei tudo.", emotion: "Frustração", intensity: 6,
+      hunger: 8, early: false, selfThought: false, allOrNothing: true, recovery: "compensou" as const, guilt: 9 },
+    { d: 11, reasons: ["Estava com muita fome."], thought: "Depois eu compenso.", emotion: "Ansiedade", intensity: 7,
+      hunger: 9, early: false, selfThought: false, allOrNothing: false, recovery: "abandonou_dia" as const, guilt: 7 },
   ];
   const difficulties: DifficultyEvent[] = [];
   const thoughts: ThoughtRecord[] = [];
@@ -194,7 +202,7 @@ function buildDifficulties(): { difficulties: DifficultyEvent[]; thoughts: Thoug
       primary_reason: s.reasons[0],
       reasons: s.reasons,
       context: "Final da tarde, depois do trabalho.",
-      hunger_intensity: s.reasons.some((r) => /fome/i.test(r)) ? 7 : 4,
+      hunger_intensity: s.hunger,
       urge_intensity: 6,
       emotional_intensity: s.intensity,
       created_at: daysAgo(s.d, 17, 40),
@@ -209,6 +217,13 @@ function buildDifficulties(): { difficulties: DifficultyEvent[]; thoughts: Thoug
       behavior: "Comi algo diferente do planejado.",
       consequences: "Senti culpa.",
       decision_point: "Antes de sair do trabalho.",
+      thought_self_identified: s.selfThought,
+      emotion_self_identified: true,
+      hunger_level: s.hunger,
+      noticed_hunger_early: s.early,
+      all_or_nothing: s.allOrNothing,
+      guilt_level: s.guilt,
+      recovery_outcome: s.recovery,
       alternative_thought:
         s.thought === "Já estraguei tudo."
           ? "Uma escolha diferente não define o resto do dia. Posso retomar na próxima."
@@ -453,6 +468,34 @@ export function buildDemoDatabase(): Database {
     meal_checkins: checkins,
     difficulty_events: difficulties,
     thought_records: thoughts,
+    alternative_thoughts: [
+      {
+        id: uid("alt"),
+        user_id: USER_ID,
+        thought_record_id: null,
+        original_thought: "Já estraguei tudo.",
+        alternative: "O almoço saiu diferente, mas posso continuar normalmente depois.",
+        belief_level: 6,
+        result: "helped_changed",
+        times_used: 2,
+        last_used_at: daysAgo(1, 18, 0),
+        created_at: daysAgo(8, 19, 0),
+        updated_at: daysAgo(1, 18, 0),
+      },
+      {
+        id: uid("alt"),
+        user_id: USER_ID,
+        thought_record_id: null,
+        original_thought: "Depois eu compenso.",
+        alternative: "Compensar depois só me deixa com mais fome à noite.",
+        belief_level: 5,
+        result: "pending",
+        times_used: 0,
+        last_used_at: null,
+        created_at: daysAgo(3, 20, 0),
+        updated_at: daysAgo(3, 20, 0),
+      },
+    ],
     conversations,
     conversation_messages: messages,
     strategies: GLOBAL_STRATEGIES,

@@ -17,7 +17,9 @@ import type {
   ProfessionalNote,
   Strategy,
   ProfessionalUserLink,
+  AlternativeThought,
 } from "./types";
+import type { ConversationState } from "./ai/conversation";
 import { buildDemoDatabase, uid, USER_ID, ADMIN_ID } from "./demo-data";
 import { computeConsistency } from "./consistency";
 import { classifyPatterns, type PatternSummary } from "./patterns";
@@ -52,6 +54,16 @@ interface StoreValue {
     answers: Record<string, unknown>,
     conversationId?: string
   ) => { event: DifficultyEvent; thought: ThoughtRecord };
+  /** Salva uma situação vinda da conversa adaptativa (evento + registro de pensamento). */
+  recordSituation: (
+    userId: string,
+    state: ConversationState,
+    conversationId?: string
+  ) => { event: DifficultyEvent; thought: ThoughtRecord };
+  addAlternativeThought: (
+    input: Partial<AlternativeThought> & { user_id: string; original_thought: string; alternative: string }
+  ) => AlternativeThought;
+  updateAlternativeThought: (id: string, patch: Partial<AlternativeThought>) => void;
   saveCopingCard: (userId: string, patch: Partial<CopingCard>) => void;
   createConversation: (userId: string, type: Conversation["type"], title: string) => Conversation;
   addMessage: (msg: Omit<ConversationMessage, "id" | "created_at">) => ConversationMessage;
@@ -421,6 +433,96 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     [mutate, sbInsert]
   );
 
+  const recordSituation: StoreValue["recordSituation"] = useCallback(
+    (userId, s, conversationId) => {
+      const nowIso = new Date().toISOString();
+      const reasons: string[] = [];
+      if ((s.hunger_level ?? 0) >= 7) reasons.push("Estava com muita fome.");
+      if (s.emotion) reasons.push(s.emotion);
+      if (s.all_or_nothing) reasons.push("Pensei que já tinha estragado o dia.");
+
+      const event: DifficultyEvent = {
+        id: genId("diff"),
+        user_id: userId,
+        checkin_id: null,
+        conversation_id: conversationId || null,
+        occurred_at: nowIso,
+        primary_reason: reasons[0] || null,
+        reasons,
+        context: s.situation || null,
+        hunger_intensity: s.hunger_level ?? null,
+        urge_intensity: null,
+        emotional_intensity: s.guilt_level ?? null,
+        created_at: nowIso,
+      };
+      const thought: ThoughtRecord = {
+        id: genId("thr"),
+        user_id: userId,
+        difficulty_event_id: event.id,
+        situation: s.situation,
+        automatic_thought: s.automatic_thought,
+        emotions: s.emotion ? [s.emotion] : [],
+        behavior: s.behavior,
+        consequences: s.consequence,
+        decision_point: undefined,
+        alternative_thought: s.alternative,
+        thought_self_identified: s.thought_self_identified,
+        emotion_self_identified: s.emotion_self_identified,
+        hunger_level: s.hunger_level ?? null,
+        noticed_hunger_early: s.noticed_hunger_early,
+        all_or_nothing: s.all_or_nothing,
+        guilt_level: s.guilt_level ?? null,
+        recovery_outcome: s.recovery_outcome,
+        created_at: nowIso,
+      };
+      mutate((d) => {
+        d.difficulty_events.unshift(event);
+        d.thought_records.unshift(thought);
+      });
+      sbInsert("difficulty_events", event as unknown as Record<string, unknown>);
+      sbInsert("thought_records", thought as unknown as Record<string, unknown>);
+      return { event, thought };
+    },
+    [mutate, sbInsert]
+  );
+
+  const addAlternativeThought: StoreValue["addAlternativeThought"] = useCallback(
+    (input) => {
+      const nowIso = new Date().toISOString();
+      const row: AlternativeThought = {
+        id: genId("alt"),
+        user_id: input.user_id,
+        thought_record_id: input.thought_record_id ?? null,
+        original_thought: input.original_thought,
+        alternative: input.alternative,
+        belief_level: input.belief_level ?? null,
+        result: input.result || "pending",
+        times_used: input.times_used ?? 0,
+        last_used_at: input.last_used_at ?? null,
+        created_at: nowIso,
+        updated_at: nowIso,
+      };
+      mutate((d) => {
+        d.alternative_thoughts.unshift(row);
+      });
+      sbInsert("alternative_thoughts", row as unknown as Record<string, unknown>);
+      return row;
+    },
+    [mutate, sbInsert]
+  );
+
+  const updateAlternativeThought: StoreValue["updateAlternativeThought"] = useCallback(
+    (id, patch) => {
+      const updated = { ...patch, updated_at: new Date().toISOString() };
+      mutate((d) => {
+        const a = d.alternative_thoughts.find((x) => x.id === id);
+        if (a) Object.assign(a, updated);
+      });
+      sbUpdate("alternative_thoughts", id, updated as Record<string, unknown>);
+    },
+    [mutate, sbUpdate]
+  );
+
   const saveCopingCard: StoreValue["saveCopingCard"] = useCallback(
     (userId, patch) => {
       let snapshot: CopingCard | null = null;
@@ -721,6 +823,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     completeOnboarding,
     addCheckin,
     recordDifficulty,
+    recordSituation,
+    addAlternativeThought,
+    updateAlternativeThought,
     saveCopingCard,
     createConversation,
     addMessage,
@@ -746,7 +851,7 @@ function emptyDatabase(): Database {
   return {
     profiles: [], professionals: [], professional_user_links: [], behavioral_goals: [],
     coping_cards: [], meal_checkins: [], difficulty_events: [], thought_records: [],
-    conversations: [], conversation_messages: [], strategies: [], strategy_trials: [],
+    alternative_thoughts: [], conversations: [], conversation_messages: [], strategies: [], strategy_trials: [],
     pattern_snapshots: [], consistency_scores: [], weekly_reports: [], risk_flags: [],
     professional_notes: [], notification_preferences: [], scheduled_interventions: [],
     legal_documents: [], legal_acceptances: [], audit_logs: [],

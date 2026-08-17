@@ -72,6 +72,29 @@ export const ConversationSummarySchema = z.object({
 });
 export type ConversationSummary = z.infer<typeof ConversationSummarySchema>;
 
+// Turno da conversa adaptativa: a IA escolhe a próxima pergunta útil,
+// mas preenche exatamente os mesmos campos do motor determinístico.
+export const AdaptiveTurnSchema = z.object({
+  message: z.string().min(1).max(500),
+  slot: z.enum([
+    "situation",
+    "hunger",
+    "thought",
+    "emotion",
+    "behavior",
+    "consequence",
+    "recovery",
+    "alternative",
+    "belief",
+    "strategy",
+    "done",
+  ]),
+  quick_replies: z.array(z.string()).max(6).optional(),
+  scale: z.boolean().optional(),
+  closing: z.boolean().optional(),
+});
+export type AdaptiveTurn = z.infer<typeof AdaptiveTurnSchema>;
+
 // Resposta conversacional livre (aberta), acolhedora e curta.
 export const ChatReplySchema = z.object({
   reply: z.string(),

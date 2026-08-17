@@ -271,7 +271,7 @@ export function FlowChat({
 
       {(finished || interrupted) && onComplete === undefined && (
         <div className="border-t border-warmgray-100 pt-3">
-          <a href="/app/hoje" className="btn-secondary w-full">
+          <a href="/app/conversa" className="btn-secondary w-full">
             Voltar para o início
           </a>
         </div>

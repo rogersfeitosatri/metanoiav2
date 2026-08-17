@@ -161,7 +161,7 @@ export default function RegistrarPage() {
             >
               Novo registro
             </button>
-            <Link href="/app/hoje" className="btn-ghost">
+            <Link href="/app/conversa" className="btn-ghost">
               Voltar ao início
             </Link>
           </div>

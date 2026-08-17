@@ -6,11 +6,11 @@ import { useEffect } from "react";
 import { useStore } from "@/lib/store";
 
 const NAV = [
-  { href: "/app/hoje", label: "Hoje", icon: "☀️" },
-  { href: "/app/ajuda", label: "Ajuda", icon: "🆘", highlight: true },
-  { href: "/app/registrar", label: "Registrar", icon: "📝" },
+  { href: "/app/conversa", label: "Conversa", icon: "💬", highlight: true },
   { href: "/app/aprendizados", label: "Aprendizados", icon: "🌿" },
   { href: "/app/norte", label: "Meu Norte", icon: "🧭" },
+  { href: "/app/evolucao", label: "Evolução", icon: "📈" },
+  { href: "/app/ajustes", label: "Ajustes", icon: "⚙️" },
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -47,20 +47,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         ))}
         <div className="mt-auto space-y-1 px-1 pt-6">
           <Link href="/app/conversas" className="block rounded-xl px-3 py-2 text-sm text-warmgray-500 hover:bg-warmgray-100">
-            Conversas
+            Histórico de conversas
           </Link>
-          <Link href="/app/privacidade" className="block rounded-xl px-3 py-2 text-sm text-warmgray-500 hover:bg-warmgray-100">
-            Privacidade
-          </Link>
-          <button
-            onClick={() => {
-              store.logout();
-              router.replace("/");
-            }}
-            className="block w-full rounded-xl px-3 py-2 text-left text-sm text-warmgray-500 hover:bg-warmgray-100"
-          >
-            Sair
-          </button>
         </div>
       </aside>
 
