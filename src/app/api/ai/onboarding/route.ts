@@ -16,16 +16,21 @@ const FALLBACK: Record<OnboardingField, string> = {
   pain: "E hoje, o que mais te incomoda nisso?",
   meaning: "Tira o peso da conta por um segundo. O que mais mudaria?",
   identity: "Como tu queria se sentir contigo daqui pra frente?",
-  anchor: "Última coisa: que frase tu diria pra ti num momento difícil?",
+  anchor:
+    "Última coisa. Pensa nesses momentos: quando tu sai do plano, quando bate aquela vontade forte, ou quando tu fica frustrado por não ter conseguido. O que tu gostaria de lembrar nessas horas?",
 };
 
 // Quando a pessoa trava, reformulamos por outro caminho em vez de repetir igual.
 const REPHRASE: Record<OnboardingField, string> = {
-  difference: "Deixa eu tentar de outro jeito: imagina que já deu certo. Como seria um dia teu?",
-  pain: "Pensa num dia recente que te incomodou. O que rolou?",
-  meaning: "Sem falar de peso: o que tu ganharia com isso?",
-  identity: "Se um amigo teu falasse de ti daqui a um ano, o que tu queria ouvir?",
-  anchor: "Não precisa ser bonito. O que tu diria pra ti mesmo?",
+  difference:
+    "Deixa eu dar exemplos. Tem gente que fala em ter mais disposição, dormir melhor, se sentir bem numa foto, parar de pensar em comida o dia todo. Alguma se parece com a tua?",
+  pain: "Pensa num dia recente que te incomodou. Foi comer sem fome? Culpa depois? Cansaço? O que rolou?",
+  meaning:
+    "Tira o peso da conta. Sobra o quê? Mais tranquilidade, menos culpa, mais confiança, mais energia — algo assim?",
+  identity:
+    "Exemplo: tem gente que quer ser alguém que cuida de si sem se punir, ou que não desiste no primeiro tropeço. E tu?",
+  anchor:
+    "Exemplos que outras pessoas usam: “um dia diferente não apaga o resto”, “posso retomar na próxima”, “isso passa”. O que tu diria pra ti?",
 };
 
 interface Body {
@@ -88,9 +93,15 @@ Tu está tentando entender este ponto agora: "${field}".
 REGRAS DESTE TURNO
 - Aproveita as PALAVRAS que a pessoa acabou de usar. Se ela falou "autoestima",
   pergunta sobre autoestima — não faça uma pergunta genérica.
-- Se ela respondeu "não sei", "não entendi" ou algo vago, devolve advance=false e
-  reformula por outro caminho (exemplo concreto, situação do dia a dia). Não repete a
-  mesma pergunta.
+- Se ela respondeu "não sei", "não entendi", "me dê exemplos" ou algo vago, devolve
+  advance=false e OFERECE 2 ou 3 exemplos concretos em quick_replies, apresentados como
+  possibilidades ("tem gente que fala em...", "alguma se parece com a tua?"). Nunca
+  afirme que é isso que ela sente — ela escolhe ou escreve o dela.
+- Muita gente não tem o hábito de falar do que sente. Prefira perguntas com situação
+  concreta ("num dia recente...", "quando tu sai do plano...") em vez de perguntas
+  abstratas sobre sentimentos.
+- Ao perguntar sobre momentos difíceis, NOMEIE a situação: sair do plano, bater vontade
+  forte, ficar frustrado depois. Não pergunte "um momento difícil" no vazio.
 - Se ela respondeu de forma útil, devolve advance=true e faz a pergunta do PRÓXIMO ponto.
 - Uma pergunta só, no máximo 2 frases curtas.`,
         prompt: [

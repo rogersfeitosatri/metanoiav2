@@ -209,48 +209,58 @@ export const LIFE_IMPACT_DIMENSIONS: {
   label: string;
   icon: string;
   prompt: string;
+  /** Exemplos para ajudar quem não tem o hábito de falar disso.
+   *  São possibilidades para reconhecer, nunca respostas impostas. */
+  examples: string[];
 }[] = [
   {
     key: "saude",
     label: "Saúde",
     icon: "❤️",
-    prompt: "Como tua saúde e teu corpo vão sentir a diferença?",
+    prompt: "O que tu acha que mudaria na tua saúde ou no teu corpo?",
+    examples: ["Dormir melhor", "Menos dores", "Mais leveza", "Exames melhores"],
   },
   {
     key: "emocional",
     label: "Emocional",
     icon: "🌊",
-    prompt: "Como vai ficar tua relação com as emoções e com a comida?",
+    prompt: "E no que tu sente? O que mudaria?",
+    examples: ["Menos culpa depois de comer", "Menos ansiedade", "Mais paz nas refeições"],
   },
   {
     key: "autoestima",
     label: "Autoestima",
     icon: "✨",
-    prompt: "Como tu vai te enxergar e te sentir contigo mesmo?",
+    prompt: "O que mudaria no jeito que tu se enxerga?",
+    examples: ["Me olhar no espelho sem me criticar", "Confiar mais em mim", "Me sentir bem em fotos"],
   },
   {
     key: "social",
     label: "Social",
     icon: "🤝",
-    prompt: "O que muda na tua vida social e nos momentos com outras pessoas?",
+    prompt: "E quando tu está com outras pessoas, o que mudaria?",
+    examples: ["Sair sem ficar ansioso com a comida", "Aceitar convites sem medo", "Usar a roupa que eu gosto"],
   },
   {
     key: "familiar",
     label: "Familiar",
     icon: "🏠",
-    prompt: "Como isso impacta tua família e quem convive contigo?",
+    prompt: "E em casa, com tua família, o que seria diferente?",
+    examples: ["Dar um exemplo melhor", "Ter pique pros meus filhos", "Comer junto sem tensão"],
   },
   {
     key: "energia",
     label: "Energia e disposição",
     icon: "⚡",
-    prompt: "Como vai estar tua energia para o dia a dia?",
+    prompt: "Como estaria tua energia no dia a dia?",
+    examples: ["Acordar melhor", "Não apagar depois do almoço", "Dar conta do dia inteiro"],
   },
   {
     key: "profissional",
     label: "Profissional",
     icon: "💼",
-    prompt: "Como isso reflete no teu trabalho e nos teus objetivos?",
+    prompt: "E no trabalho, o que mudaria?",
+    examples: ["Mais foco", "Mais disposição nas reuniões", "Mais confiança pra me expor"],
   },
 ];
 

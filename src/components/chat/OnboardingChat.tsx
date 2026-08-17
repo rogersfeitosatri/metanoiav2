@@ -144,13 +144,30 @@ export function OnboardingChat() {
     }
     else if (step === "impact") {
       const key = areaRef.current || "geral";
+      // Se a pessoa travou, NÃO guardamos "não entendi" como resposta:
+      // mostramos exemplos concretos e perguntamos de novo.
+      if (travou(value)) {
+        const dim = LIFE_IMPACT_DIMENSIONS.find((d) => d.key === key);
+        persist("user", value, step);
+        setDraft("");
+        const ex = dim?.examples || [];
+        persist(
+          "assistant",
+          ex.length
+            ? "Sem problema. Algumas pessoas dizem coisas assim — alguma se parece com a tua?"
+            : "Sem problema. Me conta do teu jeito, pode ser bem simples.",
+          "impact",
+          ex
+        );
+        return;
+      }
       const next = { ...impacts, [key]: value };
       setImpacts(next);
       persist("user", value, step);
       setDraft("");
       const restantes = LIFE_IMPACT_DIMENSIONS.filter((d) => !next[d.key]);
       if (restantes.length === 0 || Object.keys(next).length >= 3) {
-        ask("anchor", "Última coisa: que frase tu diria pra ti num momento difícil?");
+        ask("anchor", "Última coisa. Pensa nesses momentos: quando tu sai do plano, quando bate aquela vontade forte, ou quando tu fica frustrado por não ter conseguido. O que tu gostaria de lembrar nessas horas?");
       } else {
         ask("impact_more", "Tem mais alguma área?", [...restantes.map((d) => d.label), "Só essa por enquanto"]);
       }
@@ -173,7 +190,7 @@ export function OnboardingChat() {
     } else if (step === "impact_area" || step === "impact_more") {
       if (value === "Só essa por enquanto") {
         persist("user", value, step);
-        ask("anchor", "Última coisa: que frase tu diria pra ti num momento difícil?");
+        ask("anchor", "Última coisa. Pensa nesses momentos: quando tu sai do plano, quando bate aquela vontade forte, ou quando tu fica frustrado por não ter conseguido. O que tu gostaria de lembrar nessas horas?");
         return;
       }
       const dim = LIFE_IMPACT_DIMENSIONS.find((d) => d.label === value);
@@ -234,6 +251,7 @@ export function OnboardingChat() {
         {step === "goal" && <Choices options={GOALS} onChoose={choose} />}
         {step === "hypothesis" && <Choices options={["Faz sentido", "Mais ou menos", "Não é bem isso"]} onChoose={choose} />}
         {step === "impact_area" && <Choices options={LIFE_IMPACT_DIMENSIONS.map((d) => d.label)} onChoose={choose} />}
+        {step === "impact" && <Choices options={(LIFE_IMPACT_DIMENSIONS.find((d) => d.key === areaRef.current)?.examples || []).slice(0, 4)} onChoose={(v) => { setDraft(v); }} />}
         {step === "impact_more" && <Choices options={[...LIFE_IMPACT_DIMENSIONS.filter((d) => !impacts[d.key]).map((d) => d.label), "Só essa por enquanto"]} onChoose={choose} />}
         {step === "reminder" && <Choices options={["Sim, quero", "Não por enquanto"]} onChoose={choose} />}
         {step === "meal_time" && <div className="flex gap-2"><input aria-label="Horário da refeição" type="time" className="input" value={mealTime} onChange={(event) => setMealTime(event.target.value)} /><button className="btn-primary" onClick={() => { persist("user", mealTime, step); ask("meal_days", "Em quais dias essa refeição costuma acontecer?"); }}>Continuar</button></div>}
