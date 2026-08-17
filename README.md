@@ -124,7 +124,7 @@ Adicione em *Project Settings → Environment Variables*:
 | `ADMIN_EMAILS` | e-mails admin separados por vírgula | Não |
 | `AI_PROVIDER` | `gemini` | Não |
 | `GEMINI_API_KEY` | tua chave do Google AI Studio | **Não — secreta** |
-| `AI_MODEL` | `gemini-2.5-flash` | Não |
+| `AI_MODEL` | `gemini-3.6-flash` | Não |
 
 Com as duas primeiras, o site passa a usar **login real e banco de dados**.
 Com `SUPABASE_SERVICE_ROLE_KEY`, o app cria o perfil correspondente após o login.
@@ -140,7 +140,7 @@ A IA é acessada por uma camada abstrata (`src/lib/ai/provider.ts`). Trocar de p
 | `AI_PROVIDER` | Chave necessária | Modelo padrão |
 |---|---|---|
 | `local` (padrão) | nenhuma | motor determinístico |
-| `gemini` | `GEMINI_API_KEY` | `gemini-2.5-flash` |
+| `gemini` | `GEMINI_API_KEY` | `gemini-3.6-flash` |
 | `openai` | `OPENAI_API_KEY` | `gpt-4o` |
 | `anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-5` |
 
@@ -148,7 +148,8 @@ Para usar o **Google Gemini**:
 
 1. Gere a chave em [aistudio.google.com/apikey](https://aistudio.google.com/apikey)
 2. Defina `AI_PROVIDER=gemini` e `GEMINI_API_KEY=...`
-3. Opcional: `AI_MODEL=gemini-2.5-flash` (ou um modelo mais novo)
+3. Opcional: `AI_MODEL=gemini-3.6-flash`. Em caso de erro 404, acesse
+   `/api/ai/status?test=1` — ele informa qual modelo a tua chave aceita.
 
 Toda resposta é validada por **Zod** antes de virar dado (`ai/schemas.ts`), e a camada
 de segurança roda **antes** de qualquer chamada ao modelo. Se a chamada falhar por

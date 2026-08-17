@@ -72,8 +72,13 @@ export async function GET(req: NextRequest) {
 }
 
 function explicar(erro: string): string {
-  if (/\b404\b|not found|is not found for API version/i.test(erro))
-    return "O modelo em AI_MODEL não existe para esta chave. Tente AI_MODEL=gemini-2.5-flash.";
+  if (/\b404\b|not found|no longer available|is not found for API version/i.test(erro)) {
+    // O Google costuma indicar o substituto na própria mensagem — usamos ele.
+    const sugerido = erro.match(/use\s+models\/([a-z0-9.\-]+)/i)?.[1];
+    return sugerido
+      ? `Este modelo não está disponível para a tua chave. O próprio Google sugere: defina AI_MODEL=${sugerido} e faça um novo deploy.`
+      : "O modelo em AI_MODEL não está disponível para esta chave. Tente AI_MODEL=gemini-3.6-flash.";
+  }
   if (/\b400\b|API key not valid|API_KEY_INVALID/i.test(erro))
     return "A chave foi rejeitada. Gere outra em aistudio.google.com/apikey e atualize GEMINI_API_KEY.";
   if (/\b403\b|PERMISSION_DENIED|SERVICE_DISABLED/i.test(erro))

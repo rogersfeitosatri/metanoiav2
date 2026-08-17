@@ -7,7 +7,7 @@ export class GeminiProvider implements AIProvider {
   name = "gemini";
   constructor(
     private apiKey: string,
-    private model = process.env.AI_MODEL || "gemini-2.5-flash"
+    private model = process.env.AI_MODEL || "gemini-3.6-flash"
   ) {}
 
   async generateStructuredResponse<T>(input: AIInput, schema: ZodSchema<T>): Promise<T> {
