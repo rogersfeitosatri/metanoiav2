@@ -14,7 +14,14 @@ const GOALS = ["Emagrecer", "Manter o peso", "Sair do efeito sanfona", "Outro ob
 const DAYS = ["D", "S", "T", "Q", "Q", "S", "S"];
 const INITIAL = "Antes de começarmos, quero entender o que tu espera encontrar aqui. Qual destes objetivos mais se aproxima do teu momento?";
 
+// Ordem dos pontos explorados pela IA. A IA escolhe as PALAVRAS; a ordem é nossa,
+// para o Meu Norte sempre sair completo.
+const EXPLORACAO: Array<"difference" | "pain" | "meaning" | "identity"> = [
+  "difference", "pain", "meaning", "identity",
+];
+
 export function OnboardingChat() {
+
   const store = useStore();
   const router = useRouter();
   const userId = store.currentUserId!;
@@ -49,6 +56,61 @@ export function OnboardingChat() {
     if (conversationId.current) store.addMessage({ conversation_id: conversationId.current, sender_type: from, content: text, structured_content: { phase }, quick_replies: quickReplies || null });
   }
 
+  // Pede à IA a pergunta para um ponto específico, aproveitando o que a pessoa
+  // acabou de dizer. O roteiro antigo continua como rede de segurança.
+  async function askAI(
+    campoAlvo: (typeof EXPLORACAO)[number],
+    resposta: string,
+    respostas: Record<string, string>
+  ) {
+    setTyping(true);
+    let message = "";
+    try {
+      const res = await fetch("/api/ai/onboarding", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          field: campoAlvo,
+          lastMessage: resposta,
+          answers: respostas,
+          preferredName: store.currentProfile?.preferred_name,
+        }),
+      });
+      const data = await res.json();
+      message = typeof data?.message === "string" ? data.message : "";
+    } catch {
+      message = "";
+    }
+    setTyping(false);
+    if (!message) message = "Me conta um pouco mais sobre isso.";
+    setStep(campoAlvo);
+    persist("assistant", message, campoAlvo);
+  }
+
+  // A pessoa travou: repetimos o mesmo ponto por outro caminho, sem guardar a resposta.
+  function travou(texto: string) {
+    return /^\s*(n[ãa]o sei|sei l[áa]|n[ãa]o entendi|n[ãa]o fa[çc]o ideia|sla|nada)\b/i.test(texto);
+  }
+
+  // Guarda a resposta e segue para o próximo ponto (ou para as áreas de vida).
+  function avancar(campo: (typeof EXPLORACAO)[number], value: string) {
+    const next = { ...answers, [campo]: value };
+    setAnswers(next);
+    persist("user", value, step);
+    setDraft("");
+    if (travou(value)) {
+      void askAI(campo, value, next); // mesmo ponto, outra abordagem
+      return;
+    }
+    const proximo = EXPLORACAO[EXPLORACAO.indexOf(campo) + 1];
+    if (proximo) {
+      void askAI(proximo, value, next);
+    } else {
+      setStep("impact_area");
+      persist("assistant", "Em qual parte da vida tu sentiria essa mudança primeiro?", "impact_area", LIFE_IMPACT_DIMENSIONS.map((d) => d.label));
+    }
+  }
+
   function ask(next: Step, text: string, quickReplies?: string[]) {
     setStep(next);
     setTyping(true);
@@ -65,14 +127,21 @@ export function OnboardingChat() {
   function submitText() {
     const value = draft.trim();
     if (!value) return;
-    if (step === "difference") answer("difference", value, "pain", "E hoje, o que mais pesa ou te cansa nessa relação com a alimentação?");
-    else if (step === "pain") answer("pain", value, "meaning", "Se isso começasse a melhorar, o que ficaria diferente na tua vida, além do peso?");
+    if (step === "difference" || step === "pain" || step === "identity") {
+      avancar(step as (typeof EXPLORACAO)[number], value);
+    }
     else if (step === "meaning") {
       const next = { ...answers, meaning: value };
       setAnswers(next); persist("user", value, step); setDraft("");
+      // Antes de seguir, devolvemos a síntese como HIPÓTESE, para ela confirmar.
       ask("hypothesis", hypothesisFor(next), ["Faz sentido", "Mais ou menos", "Não é bem isso"]);
-    } else if (step === "correction") answer("meaning", value, "identity", "Obrigado por corrigir. Quando o peso não estiver decidindo teu valor, quem tu quer ser no cuidado contigo?");
-    else if (step === "identity") answer("identity", value, "impact_area", "Em qual parte da vida tu sentiria essa mudança primeiro?", LIFE_IMPACT_DIMENSIONS.map((d) => d.label));
+    } else if (step === "anchor") {
+      answer("anchor", value, "meal_name", "Agora vamos combinar os momentos em que eu posso estar por perto. Qual refeição tu quer cadastrar primeiro?");
+    } else if (step === "correction") {
+      const next = { ...answers, meaning: value };
+      setAnswers(next); persist("user", value, step); setDraft("");
+      void askAI("identity", value, next);
+    }
     else if (step === "impact") {
       const key = areaRef.current || "geral";
       const next = { ...impacts, [key]: value };
@@ -86,15 +155,20 @@ export function OnboardingChat() {
         ask("impact_more", "Tem outra área onde tu sentiria essa diferença?", [...restantes.map((d) => d.label), "Só essa por enquanto"]);
       }
     }
-    else if (step === "anchor") answer("anchor", value, "meal_name", "Agora vamos combinar os momentos em que eu posso estar por perto. Qual refeição tu quer cadastrar primeiro?");
+    
     else if (step === "meal_name") { setAnswers((current) => ({ ...current, meal_name: value })); persist("user", value, step); setDraft(""); ask("meal_time", `Que horas costuma ser ${lowerFirst(value)}?`); }
   }
 
   function choose(value: string) {
-    if (step === "goal") answer("goal", value, "difference", "O que tu espera que mude na tua vida ao avançar nesse objetivo?");
+    if (step === "goal") {
+      const next = { ...answers, goal: value };
+      setAnswers(next);
+      persist("user", value, step);
+      void askAI("difference", value, next);
+    }
     else if (step === "hypothesis") {
       persist("user", value, step);
-      if (value === "Faz sentido") { setAnswers((current) => ({ ...current, hypothesis_confirmed: "true" })); ask("identity", "Quando o peso não estiver decidindo teu valor, quem tu quer ser no cuidado contigo?"); }
+      if (value === "Faz sentido") { const next = { ...answers, hypothesis_confirmed: "true" }; setAnswers(next); void askAI("identity", "confirmou a síntese", next); }
       else ask("correction", "Tudo bem. Como tu diria isso com tuas palavras?");
     } else if (step === "impact_area" || step === "impact_more") {
       if (value === "Só essa por enquanto") {

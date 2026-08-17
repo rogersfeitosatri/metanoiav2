@@ -95,6 +95,16 @@ export const AdaptiveTurnSchema = z.object({
 });
 export type AdaptiveTurn = z.infer<typeof AdaptiveTurnSchema>;
 
+// Turno do onboarding conduzido por IA: a próxima pergunta nasce do que a pessoa
+// acabou de dizer. advance=false quando ela respondeu "não sei" / "não entendi" e
+// precisamos reformular a MESMA pergunta por outro caminho.
+export const OnboardingTurnSchema = z.object({
+  message: z.string().min(1).max(400),
+  advance: z.boolean(),
+  quick_replies: z.array(z.string()).max(4).optional(),
+});
+export type OnboardingTurn = z.infer<typeof OnboardingTurnSchema>;
+
 // Resposta conversacional livre (aberta), acolhedora e curta.
 export const ChatReplySchema = z.object({
   reply: z.string(),
