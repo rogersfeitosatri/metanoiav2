@@ -122,32 +122,38 @@ Adicione em *Project Settings → Environment Variables*:
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | chave *publishable* do projeto | Sim (é público) |
 | `SUPABASE_SERVICE_ROLE_KEY` | chave *service_role* do projeto | **Não — secreta** |
 | `ADMIN_EMAILS` | e-mails admin separados por vírgula | Não |
-| `AI_PROVIDER` | `openai` | Não |
-| `OPENAI_API_KEY` | tua chave secreta da OpenAI | **Não — secreta** |
-| `AI_MODEL` | `gpt-4o` | Não |
+| `AI_PROVIDER` | `gemini` | Não |
+| `GEMINI_API_KEY` | tua chave do Google AI Studio | **Não — secreta** |
+| `AI_MODEL` | `gemini-2.5-flash` | Não |
 
 Com as duas primeiras, o site passa a usar **login real e banco de dados**.
 Com `SUPABASE_SERVICE_ROLE_KEY`, o app cria o perfil correspondente após o login.
 Com `ADMIN_EMAILS`, os e-mails listados recebem `role=admin` automaticamente.
-Sem elas, continua em modo demo. `OPENAI_API_KEY` nunca deve levar o prefixo
+Sem elas, continua em modo demo. `GEMINI_API_KEY` nunca deve levar o prefixo
 `NEXT_PUBLIC_` (isso a exporia no navegador).
 
 ## 4. Configurar o provedor de IA
 
-A IA é acessada por uma camada abstrata (`src/lib/ai/provider.ts`):
+A IA é acessada por uma camada abstrata (`src/lib/ai/provider.ts`). Trocar de provedor
+é só mudar variáveis de ambiente — nenhuma linha de código muda.
 
-- `AI_PROVIDER=local` (padrão): motor de regras **determinístico** (`flow-engine.ts`) —
-  os fluxos conversacionais, a camada de segurança e os relatórios funcionam **sem chave
-  de API**.
-- `AI_PROVIDER=anthropic` + `ANTHROPIC_API_KEY`: usa a API da Anthropic. Toda resposta é
-  validada por **Zod** antes de virar dado (`schemas.ts`). Prompts modulares em
-  `src/prompts/`.
+| `AI_PROVIDER` | Chave necessária | Modelo padrão |
+|---|---|---|
+| `local` (padrão) | nenhuma | motor determinístico |
+| `gemini` | `GEMINI_API_KEY` | `gemini-2.5-flash` |
+| `openai` | `OPENAI_API_KEY` | `gpt-4o` |
+| `anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-5` |
 
-Trocar de provedor é só mudar a variável de ambiente. Nunca se salva raciocínio interno
-do modelo — apenas dados fornecidos, classificações estruturadas, resumos, estratégias,
-resultados e alertas (seção 25).
+Para usar o **Google Gemini**:
 
----
+1. Gere a chave em [aistudio.google.com/apikey](https://aistudio.google.com/apikey)
+2. Defina `AI_PROVIDER=gemini` e `GEMINI_API_KEY=...`
+3. Opcional: `AI_MODEL=gemini-2.5-flash` (ou um modelo mais novo)
+
+Toda resposta é validada por **Zod** antes de virar dado (`ai/schemas.ts`), e a camada
+de segurança roda **antes** de qualquer chamada ao modelo. Se a chamada falhar por
+qualquer motivo, o app cai automaticamente no motor determinístico — nunca quebra para
+o usuário. Nunca se salva raciocínio interno do modelo.
 
 ## 5. Migrations
 
