@@ -5,8 +5,9 @@ import { useRouter } from "next/navigation";
 import { useStore, type OnboardingData } from "@/lib/store";
 import { TERMS_TEXT } from "@/lib/demo-data";
 import { TypingDots } from "@/components/ui";
+import { LIFE_IMPACT_DIMENSIONS } from "@/lib/labels";
 
-type Step = "goal" | "difference" | "pain" | "meaning" | "hypothesis" | "correction" | "identity" | "impact" | "anchor" | "meal_name" | "meal_time" | "meal_days" | "reminder" | "terms";
+type Step = "goal" | "difference" | "pain" | "meaning" | "hypothesis" | "correction" | "identity" | "impact_area" | "impact" | "impact_more" | "anchor" | "meal_name" | "meal_time" | "meal_days" | "reminder" | "terms";
 type Bubble = { from: "assistant" | "user"; text: string };
 
 const GOALS = ["Emagrecer", "Manter o peso", "Sair do efeito sanfona", "Outro objetivo"];
@@ -23,6 +24,8 @@ export function OnboardingChat() {
   const [draft, setDraft] = useState("");
   const [mealTime, setMealTime] = useState("12:00");
   const [days, setDays] = useState([0, 1, 2, 3, 4, 5, 6]);
+  const [impacts, setImpacts] = useState<Record<string, string>>({});
+  const areaRef = useRef<string | null>(null);
   const [typing, setTyping] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
@@ -69,8 +72,20 @@ export function OnboardingChat() {
       setAnswers(next); persist("user", value, step); setDraft("");
       ask("hypothesis", hypothesisFor(next), ["Faz sentido", "Mais ou menos", "Não é bem isso"]);
     } else if (step === "correction") answer("meaning", value, "identity", "Obrigado por corrigir. Quando o peso não estiver decidindo teu valor, quem tu quer ser no cuidado contigo?");
-    else if (step === "identity") answer("identity", value, "impact", "Em qual parte da vida tu sentiria essa mudança primeiro?");
-    else if (step === "impact") answer("impact", value, "anchor", "Quando vier um momento difícil, que frase tua poderia te lembrar desse Norte?");
+    else if (step === "identity") answer("identity", value, "impact_area", "Em qual parte da vida tu sentiria essa mudança primeiro?", LIFE_IMPACT_DIMENSIONS.map((d) => d.label));
+    else if (step === "impact") {
+      const key = areaRef.current || "geral";
+      const next = { ...impacts, [key]: value };
+      setImpacts(next);
+      persist("user", value, step);
+      setDraft("");
+      const restantes = LIFE_IMPACT_DIMENSIONS.filter((d) => !next[d.key]);
+      if (restantes.length === 0 || Object.keys(next).length >= 3) {
+        ask("anchor", "Quando vier um momento difícil, que frase tua poderia te lembrar desse Norte?");
+      } else {
+        ask("impact_more", "Tem outra área onde tu sentiria essa diferença?", [...restantes.map((d) => d.label), "Só essa por enquanto"]);
+      }
+    }
     else if (step === "anchor") answer("anchor", value, "meal_name", "Agora vamos combinar os momentos em que eu posso estar por perto. Qual refeição tu quer cadastrar primeiro?");
     else if (step === "meal_name") { setAnswers((current) => ({ ...current, meal_name: value })); persist("user", value, step); setDraft(""); ask("meal_time", `Que horas costuma ser ${lowerFirst(value)}?`); }
   }
@@ -81,6 +96,16 @@ export function OnboardingChat() {
       persist("user", value, step);
       if (value === "Faz sentido") { setAnswers((current) => ({ ...current, hypothesis_confirmed: "true" })); ask("identity", "Quando o peso não estiver decidindo teu valor, quem tu quer ser no cuidado contigo?"); }
       else ask("correction", "Tudo bem. Como tu diria isso com tuas palavras?");
+    } else if (step === "impact_area" || step === "impact_more") {
+      if (value === "Só essa por enquanto") {
+        persist("user", value, step);
+        ask("anchor", "Quando vier um momento difícil, que frase tua poderia te lembrar desse Norte?");
+        return;
+      }
+      const dim = LIFE_IMPACT_DIMENSIONS.find((d) => d.label === value);
+      areaRef.current = dim?.key || "geral";
+      persist("user", value, step);
+      ask("impact", dim ? dim.prompt : "O que mudaria nessa parte da vida?");
     } else if (step === "reminder") { setAnswers((current) => ({ ...current, reminder: value })); persist("user", value, step); ask("terms", "Antes de seguir, preciso da tua autorização para guardar estas conversas e usá-las no teu acompanhamento."); }
   }
 
@@ -96,7 +121,7 @@ export function OnboardingChat() {
       first_commitment: "Observar o próximo momento com curiosidade, sem compensar.", accepted_terms: true,
       why_it_matters: answers.meaning || answers.difference, future_difference: answers.difference, cost_of_no_change: answers.pain,
       desired_identity: answers.identity, reminder_statement: answers.anchor,
-      life_impacts: answers.impact ? { primeiro_impacto: answers.impact } : {},
+      life_impacts: impacts,
       meals: [{ name: answers.meal_name || "Refeição", time_of_day: mealTime, days_of_week: days, reminder_enabled: answers.reminder === "Sim, quero" }],
     };
     store.completeOnboarding(data);
@@ -134,6 +159,8 @@ export function OnboardingChat() {
       <div className="sticky bottom-0 border-t border-warmgray-100 bg-[#fcfbf8] py-4">
         {step === "goal" && <Choices options={GOALS} onChoose={choose} />}
         {step === "hypothesis" && <Choices options={["Faz sentido", "Mais ou menos", "Não é bem isso"]} onChoose={choose} />}
+        {step === "impact_area" && <Choices options={LIFE_IMPACT_DIMENSIONS.map((d) => d.label)} onChoose={choose} />}
+        {step === "impact_more" && <Choices options={[...LIFE_IMPACT_DIMENSIONS.filter((d) => !impacts[d.key]).map((d) => d.label), "Só essa por enquanto"]} onChoose={choose} />}
         {step === "reminder" && <Choices options={["Sim, quero", "Não por enquanto"]} onChoose={choose} />}
         {step === "meal_time" && <div className="flex gap-2"><input aria-label="Horário da refeição" type="time" className="input" value={mealTime} onChange={(event) => setMealTime(event.target.value)} /><button className="btn-primary" onClick={() => { persist("user", mealTime, step); ask("meal_days", "Em quais dias essa refeição costuma acontecer?"); }}>Continuar</button></div>}
         {step === "meal_days" && <div className="space-y-3"><div className="grid grid-cols-7 gap-2">{DAYS.map((label, value) => <button key={value} aria-pressed={days.includes(value)} className={`h-11 rounded-lg border text-sm font-medium ${days.includes(value) ? "border-sage-500 bg-sage-100 text-sage-800" : "border-warmgray-200 bg-white text-warmgray-500"}`} onClick={() => setDays((current) => current.includes(value) ? current.filter((item) => item !== value) : [...current, value].sort())}>{label}</button>)}</div><button className="btn-primary w-full" disabled={!days.length} onClick={() => { persist("user", days.length === 7 ? "Todos os dias" : `${days.length} dias por semana`, step); ask("reminder", "Quer receber um lembrete próximo desse horário?", ["Sim, quero", "Não por enquanto"]); }}>Continuar</button></div>}
