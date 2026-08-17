@@ -166,10 +166,10 @@ export function OnboardingChat() {
       persist("user", value, step);
       setDraft("");
       const restantes = LIFE_IMPACT_DIMENSIONS.filter((d) => !next[d.key]);
-      if (restantes.length === 0 || Object.keys(next).length >= 3) {
+      if (restantes.length === 0 || Object.keys(next).length >= 2) {
         ask("anchor", "Última coisa. Pensa nesses momentos: quando tu sai do plano, quando bate aquela vontade forte, ou quando tu fica frustrado por não ter conseguido. O que tu gostaria de lembrar nessas horas?");
       } else {
-        ask("impact_more", "Tem mais alguma área?", [...restantes.map((d) => d.label), "Só essa por enquanto"]);
+        ask("impact_more", "Tem mais alguma que pesa bastante? (dá pra completar o resto depois)", [...restantes.map((d) => d.label), "Só essa por enquanto"]);
       }
     }
     

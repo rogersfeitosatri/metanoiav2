@@ -71,6 +71,31 @@ export default function NortePage() {
         <h2 className="font-semibold text-warmgray-800">
           Como seguir o meu plano vai impactar a minha vida
         </h2>
+
+        {/* Pendência: no cadastro pedimos só as áreas principais. O resto fica aqui,
+            como convite — sem cobrança. */}
+        {filled > 0 && filled < LIFE_IMPACT_DIMENSIONS.length && (
+          <div className="mt-3 rounded-lg border border-sand-300 bg-sand-50 p-4">
+            <p className="text-sm font-medium text-warmgray-800">
+              Faltam {LIFE_IMPACT_DIMENSIONS.length - filled} áreas para completar
+            </p>
+            <p className="mt-1 text-sm text-warmgray-600">
+              Quanto mais motivos tu tiver escritos aqui, mais forte fica teu Norte nos
+              momentos difíceis. Dá pra preencher aos poucos.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {LIFE_IMPACT_DIMENSIONS.filter((d) => !impacts[d.key]?.trim()).map((d) => (
+                <button
+                  key={d.key}
+                  className="chip"
+                  onClick={() => start(`impact:${d.key}`, "")}
+                >
+                  {d.icon} {d.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         <p className="mt-1 text-sm text-warmgray-500">
           Preenche as áreas que fizerem sentido. {filled} de {LIFE_IMPACT_DIMENSIONS.length}{" "}
           preenchidas.
@@ -98,7 +123,17 @@ export default function NortePage() {
                       value={draft}
                       onChange={(e) => setDraft(e.target.value)}
                       autoFocus
+                      placeholder="Escreve do teu jeito…"
                     />
+                    {dim.examples?.length > 0 && (
+                      <div className="flex flex-wrap gap-2">
+                        {dim.examples.map((ex) => (
+                          <button key={ex} type="button" className="chip" onClick={() => setDraft(ex)}>
+                            {ex}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                     <div className="flex gap-2">
                       <button className="btn-primary" onClick={() => saveImpact(dim.key)}>
                         Salvar
