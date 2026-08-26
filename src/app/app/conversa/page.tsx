@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
+import { conversationHref } from "@/lib/conversation-intent";
 
-// A Conversa vive em /app/hoje (ConversationHome).
-export default function Page() {
-  redirect("/app/hoje");
+export default function ConversaLegacyPage() {
+  redirect(conversationHref("default"));
 }

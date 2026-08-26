@@ -1,13 +1,20 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { TypingDots } from "@/components/ui";
+import {
+  CONVERSATION_INTENT_CONFIG,
+  isExplicitConversationIntent,
+  parseConversationIntent,
+} from "@/lib/conversation-intent";
 import { useStore } from "@/lib/store";
 import type { Conversation, ConversationMessage, MealSchedule, UserMemory } from "@/lib/types";
 
 type Bubble = { id: string; from: "assistant" | "user" | "safety"; text: string };
-type Phase = "open" | "meal_checkin" | "difficulty_consent" | "difficulty_hunger" | "difficulty_reason" | "difficulty_recovery" | "success_factor" | "trial_review";
+type Phase = "open" | "meal_selection" | "meal_checkin" | "difficulty_consent" | "difficulty_hunger" | "difficulty_reason" | "difficulty_recovery" | "success_factor" | "trial_review";
+
+const MEAL_STATUS_REPLIES = ["Realizei", "Realizei em parte", "Não realizei", "Prefiro só conversar"];
 
 interface AiResponse {
   reply: string;
@@ -21,15 +28,19 @@ interface AiResponse {
 
 export function ConversationHome() {
   const store = useStore();
+  const searchParams = useSearchParams();
+  const intent = parseConversationIntent(searchParams.get("intent"));
   const userId = store.currentUserId!;
   const profile = store.currentProfile!;
   const [bubbles, setBubbles] = useState<Bubble[]>([]);
   const [quickReplies, setQuickReplies] = useState<string[]>([]);
   const [draft, setDraft] = useState("");
   const [typing, setTyping] = useState(false);
+  const initializedEntryRef = useRef<string | null>(null);
   const conversationRef = useRef<Conversation | null>(null);
   const phaseRef = useRef<Phase>("open");
   const activeScheduleRef = useRef<MealSchedule | null>(null);
+  const customMealNameRef = useRef<string | null>(null);
   const activeCheckinRef = useRef<string | null>(null);
   const hungerRef = useRef<number | null>(null);
   const reasonRef = useRef<string | null>(null);
@@ -41,18 +52,38 @@ export function ConversationHome() {
   const trials = useMemo(() => store.db.strategy_trials.filter((item) => item.user_id === userId), [store.db.strategy_trials, userId]);
 
   useEffect(() => {
-    if (conversationRef.current) return;
-    const existing = store.db.conversations
-      .filter((item) => item.user_id === userId && item.type === "open_chat" && item.status === "open")
-      .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())[0];
-    const conversation = existing || store.createConversation(userId, "open_chat", "Conversa com o Metanóia");
+    const entryKey = `${userId}:${intent}`;
+    if (initializedEntryRef.current === entryKey) return;
+    initializedEntryRef.current = entryKey;
+
+    conversationRef.current = null;
+    phaseRef.current = "open";
+    activeScheduleRef.current = null;
+    customMealNameRef.current = null;
+    activeCheckinRef.current = null;
+    hungerRef.current = null;
+    reasonRef.current = null;
+    hypothesisRef.current = null;
+    setBubbles([]);
+    setQuickReplies([]);
+    setDraft("");
+    setTyping(false);
+
+    const config = CONVERSATION_INTENT_CONFIG[intent];
+    const explicitIntent = isExplicitConversationIntent(intent);
+    const existing = explicitIntent
+      ? undefined
+      : store.db.conversations
+          .filter((item) => item.user_id === userId && item.type === "open_chat" && item.status === "open")
+          .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())[0];
+    const conversation = existing || store.createConversation(userId, config.conversationType, config.title);
     conversationRef.current = conversation;
     const existingMessages = store.db.conversation_messages.filter((item) => item.conversation_id === conversation.id);
-    if (existingMessages.length) {
+    if (!explicitIntent && existingMessages.length) {
       setBubbles(existingMessages.map(toBubble));
       const last = existingMessages.at(-1);
       const savedPhase = last?.structured_content?.phase;
-      if (typeof savedPhase === "string" && ["open", "meal_checkin", "difficulty_consent", "difficulty_hunger", "difficulty_reason", "difficulty_recovery", "success_factor", "trial_review"].includes(savedPhase)) {
+      if (typeof savedPhase === "string" && ["open", "meal_selection", "meal_checkin", "difficulty_consent", "difficulty_hunger", "difficulty_reason", "difficulty_recovery", "success_factor", "trial_review"].includes(savedPhase)) {
         phaseRef.current = savedPhase as Phase;
         if (savedPhase === "meal_checkin") activeScheduleRef.current = findRelevantMeal(store.db.meal_schedules.filter((item) => item.user_id === userId && item.active));
       }
@@ -60,24 +91,55 @@ export function ConversationHome() {
       return;
     }
     const pending = trials.find((item) => item.result === "not_tested");
-    const dueMeal = findRelevantMeal(store.db.meal_schedules.filter((item) => item.user_id === userId && item.active));
+    const activeSchedules = store.db.meal_schedules.filter((item) => item.user_id === userId && item.active);
+    const dueMeal = findRelevantMeal(activeSchedules);
     let text = `Oi, ${profile.preferred_name}. Como tu chega para esta conversa hoje?`;
     let replies = ["Quero contar como estou", "Uma refeição foi difícil", "Algo deu certo", "Preciso de apoio agora"];
-    if (pending) {
+
+    if (intent === "help_now") {
+      text = "O que tá pegando agora?";
+      replies = ["Vontade de comer", "Culpa depois de comer", "Ansiedade ou estresse", "Quero me preparar"];
+    } else if (intent === "register_event") {
+      text = "Tá. Me conta o que aconteceu.";
+      replies = [];
+    } else if (intent === "prepare") {
+      text = "O que tu quer se preparar para enfrentar?";
+      replies = [];
+    } else if (intent === "review_strategy" && pending) {
+      text = `Na última vez, tu pensou em testar “${pending.title_snapshot}”. Chegou a experimentar em alguma situação?`;
+      replies = ["Ajudou", "Ajudou em parte", "Não ajudou", "Ainda não testei"];
+      phaseRef.current = "trial_review";
+    } else if (intent === "review_strategy") {
+      text = "Qual estratégia tu quer avaliar?";
+      replies = [];
+    } else if (intent === "meal_checkin") {
+      if (dueMeal) {
+        activeScheduleRef.current = dueMeal;
+        text = `${dueMeal.name} estava previsto por volta de ${dueMeal.time_of_day.slice(0, 5)}. Como foi para ti?`;
+        replies = MEAL_STATUS_REPLIES;
+        phaseRef.current = "meal_checkin";
+      } else {
+        text = "Qual refeição tu quer registrar?";
+        replies = activeSchedules.length
+          ? activeSchedules.slice(0, 5).map((item) => item.name)
+          : ["Café da manhã", "Almoço", "Lanche", "Jantar", "Outra"];
+        phaseRef.current = "meal_selection";
+      }
+    } else if (pending) {
       text = `Na última vez, tu pensou em testar “${pending.title_snapshot}”. Chegou a experimentar em alguma situação?`;
       replies = ["Ajudou", "Ajudou em parte", "Não ajudou", "Ainda não testei"];
       phaseRef.current = "trial_review";
     } else if (dueMeal) {
       activeScheduleRef.current = dueMeal;
       text = `${dueMeal.name} estava previsto por volta de ${dueMeal.time_of_day.slice(0, 5)}. Como foi para ti?`;
-      replies = ["Realizei", "Realizei em parte", "Não realizei", "Prefiro só conversar"];
+      replies = MEAL_STATUS_REPLIES;
       phaseRef.current = "meal_checkin";
     } else if (card?.reminder_statement) {
       text = `Oi, ${profile.preferred_name}. Teu Norte lembra: “${card.reminder_statement}”. O que está mais presente para ti agora?`;
     }
-    addAssistant(text, replies, { phase: phaseRef.current });
+    addAssistant(text, replies, { phase: phaseRef.current, entry_intent: intent });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userId]);
+  }, [intent, userId]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -139,9 +201,27 @@ export function ConversationHome() {
       addAssistant(result === "not_tested" ? "Tudo bem, ela continua como uma possibilidade, não como algo que já funciona. O que tu precisa hoje?" : "Obrigado por avaliar. O que nessa experiência vale guardar para a próxima vez?", result === "not_tested" ? ["Quero conversar", "Preciso de apoio agora"] : []);
       return true;
     }
-    if (phase === "meal_checkin" && !/prefiro/i.test(text)) {
+    if (phase === "meal_selection") {
+      const schedule = store.db.meal_schedules.find(
+        (item) => item.user_id === userId && item.active && item.name.toLocaleLowerCase("pt-BR") === text.toLocaleLowerCase("pt-BR")
+      );
+      activeScheduleRef.current = schedule || null;
+      customMealNameRef.current = schedule ? null : text;
+      phaseRef.current = "meal_checkin";
+      addAssistant(`Como foi ${schedule?.name || text}?`, MEAL_STATUS_REPLIES, {
+        phase: "meal_checkin",
+        schedule_id: schedule?.id || null,
+        custom_meal_name: schedule ? null : text,
+      });
+      return true;
+    }
+    if (phase === "meal_checkin") {
+      if (/prefiro/i.test(text)) {
+        phaseRef.current = "open";
+        return false;
+      }
       const status = /em parte/i.test(text) ? "partial" : /não|nao/i.test(text) ? "not_completed" : "completed";
-      const checkin = store.addCheckin({ user_id: userId, schedule_id: activeScheduleRef.current?.id || null, custom_meal_name: activeScheduleRef.current?.name || null, status });
+      const checkin = store.addCheckin({ user_id: userId, schedule_id: activeScheduleRef.current?.id || null, custom_meal_name: activeScheduleRef.current?.name || customMealNameRef.current || null, status });
       activeCheckinRef.current = checkin.id;
       if (status === "completed") { phaseRef.current = "success_factor"; addAssistant("O que ajudou essa refeição a acontecer desse jeito?"); }
       else { phaseRef.current = "difficulty_consent"; addAssistant("Entendi. Tu prefere apenas registrar ou quer entender o que tornou esse momento mais difícil?", ["Só registrar", "Quero entender"]); }
@@ -202,7 +282,7 @@ export function ConversationHome() {
 
   return (
     <section className="flex h-[calc(100dvh-8.5rem)] min-h-[520px] flex-col md:h-[calc(100dvh-4rem)]">
-      <header className="flex items-center justify-between border-b border-warmgray-100 pb-3"><div><h1 className="font-semibold text-sage-800">Metanóia</h1><p className="text-xs text-warmgray-500">Uma pergunta de cada vez</p></div><Link href="/app/conversas" className="text-sm font-medium text-sage-700">Histórico</Link></header>
+      <header className="border-b border-warmgray-100 pb-3"><h1 className="font-semibold text-sage-800">Metanóia</h1><p className="text-xs text-warmgray-500">Uma pergunta de cada vez</p></header>
       <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto py-5">
         {bubbles.map((bubble) => <div key={bubble.id} className={`flex ${bubble.from === "user" ? "justify-end" : "justify-start"}`}><div className={bubble.from === "user" ? "chat-bubble-user" : bubble.from === "safety" ? "max-w-[86%] rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-warmgray-700" : "chat-bubble-assistant"}>{bubble.text}</div></div>)}
         {typing && <div className="chat-bubble-assistant w-fit"><TypingDots /></div>}

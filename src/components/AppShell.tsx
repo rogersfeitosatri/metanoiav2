@@ -11,7 +11,7 @@ const NAV = [
   { href: "/app/aprendizados", label: "Aprendizados", short: "A" },
   { href: "/app/norte", label: "Meu Norte", short: "N" },
   { href: "/app/evolucao", label: "Evolução", short: "E" },
-  { href: "/app/configuracoes", label: "Ajustes", short: "J" },
+  { href: "/app/configuracoes", label: "Configurações", short: "G" },
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -49,7 +49,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <aside className="hidden w-56 shrink-0 flex-col gap-1 py-8 md:flex">
         <div className="mb-6 px-3"><span className="text-lg font-semibold text-sage-800">Metanóia</span><p className="text-xs text-warmgray-500">Acompanhamento</p></div>
         {NAV.map((item) => (
-          <NavItem key={item.href} item={item} active={pathname === item.href} desktop pending={nortePendente && item.href === "/app/norte"} />
+          <NavItem key={item.href} item={item} active={isNavItemActive(pathname, item.href)} desktop pending={nortePendente && item.href === "/app/norte"} />
         ))}
       </aside>
 
@@ -60,12 +60,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <nav className="fixed inset-x-0 bottom-0 z-20 border-t border-warmgray-100 bg-white/95 backdrop-blur md:hidden">
         <div className="mx-auto grid max-w-lg grid-cols-5 px-1 py-2">
           {NAV.map((item) => (
-            <NavItem key={item.href} item={item} active={pathname === item.href} pending={nortePendente && item.href === "/app/norte"} />
+            <NavItem key={item.href} item={item} active={isNavItemActive(pathname, item.href)} pending={nortePendente && item.href === "/app/norte"} />
           ))}
         </div>
       </nav>
     </div>
   );
+}
+
+function isNavItemActive(pathname: string, href: string): boolean {
+  if (href === "/app/configuracoes") {
+    return pathname === href || pathname === "/app/ajustes" || pathname === "/app/privacidade";
+  }
+  return pathname === href;
 }
 
 function NavItem({

@@ -134,7 +134,13 @@ function loadLocalDb(): Database {
   if (typeof window === "undefined") return buildDemoDatabase();
   try {
     const raw = localStorage.getItem(DB_KEY);
-    if (raw) return JSON.parse(raw) as Database;
+    if (raw) {
+      const saved = JSON.parse(raw) as Database;
+      return {
+        ...saved,
+        alternative_thoughts: saved.alternative_thoughts || [],
+      };
+    }
   } catch {
     /* ignora */
   }

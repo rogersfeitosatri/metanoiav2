@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
+import { conversationHref } from "@/lib/conversation-intent";
 
-// Área reorganizada: a experiência central agora é a Conversa.
-export default function Page() {
-  redirect("/app/conversa");
+export default function AjudaPage() {
+  redirect(conversationHref("help_now"));
 }

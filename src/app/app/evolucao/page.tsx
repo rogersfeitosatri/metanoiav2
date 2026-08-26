@@ -22,7 +22,7 @@ export default function EvolucaoPage() {
         <h1 className="text-2xl font-semibold text-sage-800">Evolução</h1>
         <EmptyState>
           {evo.headline}{" "}
-          <Link href="/app/conversa" className="font-medium text-sage-700 underline">
+          <Link href="/app/hoje" className="font-medium text-sage-700 underline">
             Começar uma conversa
           </Link>
         </EmptyState>

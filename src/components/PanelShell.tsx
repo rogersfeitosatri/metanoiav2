@@ -23,7 +23,7 @@ export function PanelShell({
     if (!store.currentProfile) router.replace("/");
     else if (store.currentProfile.role !== role) {
       const r = store.currentProfile.role;
-      router.replace(r === "user" ? "/app/conversa" : r === "professional" ? "/pro" : "/admin");
+      router.replace(r === "user" ? "/app/hoje" : r === "professional" ? "/pro" : "/admin");
     }
   }, [store.ready, store.currentProfile, role, router]);
 
