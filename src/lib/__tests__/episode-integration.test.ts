@@ -20,6 +20,20 @@ const MIGRATION = readFileSync(
   join(ROOT, "supabase/migrations", migrationName!),
   "utf8"
 );
+const hardeningMigrationName = readdirSync(join(ROOT, "supabase/migrations")).find(
+  (name) => name.endsWith("_harden_behavioral_episode_privileges.sql")
+);
+const HARDENING_MIGRATION = readFileSync(
+  join(ROOT, "supabase/migrations", hardeningMigrationName!),
+  "utf8"
+);
+const relationIndexMigrationName = readdirSync(join(ROOT, "supabase/migrations")).find(
+  (name) => name.endsWith("_index_behavioral_episode_relations.sql")
+);
+const RELATION_INDEX_MIGRATION = readFileSync(
+  join(ROOT, "supabase/migrations", relationIndexMigrationName!),
+  "utf8"
+);
 
 describe("integração dos episódios persistentes", () => {
   it("mensagens e ações recebem o episódio atual", () => {
@@ -81,6 +95,15 @@ describe("migration de episódios", () => {
     expect(MIGRATION).not.toMatch(/grant[^;]*delete[^;]*to authenticated/i);
   });
 
+  it("remove privilégios herdados e libera somente leitura e gravação necessárias", () => {
+    expect(HARDENING_MIGRATION).toContain(
+      "revoke all privileges on table public.behavioral_episodes from authenticated"
+    );
+    expect(HARDENING_MIGRATION).toContain(
+      "grant select, insert, update on table public.behavioral_episodes to authenticated"
+    );
+  });
+
   it("valida que relações pertençam ao mesmo usuário ou conversa", () => {
     expect(MIGRATION).toContain("messages_episode_integrity");
     expect(MIGRATION).toContain("e.conversation_id = conversation_messages.conversation_id");
@@ -95,5 +118,8 @@ describe("migration de episódios", () => {
     expect(MIGRATION).toContain("idx_episodes_user_event_time");
     expect(MIGRATION).toContain("idx_episodes_followup_due");
     expect(MIGRATION).toContain("idx_messages_episode_time");
+    expect(RELATION_INDEX_MIGRATION).toContain("idx_episodes_related_meal_checkin");
+    expect(RELATION_INDEX_MIGRATION).toContain("idx_episodes_related_strategy_trial");
+    expect(RELATION_INDEX_MIGRATION).toContain("idx_episodes_related_difficulty_event");
   });
 });
