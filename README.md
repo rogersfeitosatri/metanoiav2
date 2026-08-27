@@ -21,7 +21,7 @@ src/
       hoje/ ajuda/ registrar/ aprendizados/ norte/ conversas/ privacidade/
     pro/                     # painel do PROFISSIONAL (lista + perfil com 8 abas)
     admin/                   # painel ADMINISTRATIVO (métricas, vínculos, termos, logs)
-  components/                # AppShell, PanelShell, chat/FlowChat, ui primitives
+  components/                # AppShell, PanelShell, chat principal e ui primitives
   lib/
     types.ts                 # modelo de dados (espelha o schema Postgres)
     store.tsx                # store React + localStorage (modo demo)
@@ -32,7 +32,8 @@ src/
     reports.ts               # geração de relatórios semanais
     ai/
       provider.ts            # abstração AIProvider (local | anthropic)
-      flow-engine.ts         # motor conversacional determinístico (orquestrador/TCC/EM)
+      conversation.ts        # fallback adaptativo e estado da conversa pós-onboarding
+      conversation-orchestrator.ts # único orquestrador pós-onboarding
       safety.ts              # camada de segurança (detecção de risco)
       schemas.ts             # schemas Zod para saídas estruturadas da IA
     __tests__/               # testes unitários (vitest)

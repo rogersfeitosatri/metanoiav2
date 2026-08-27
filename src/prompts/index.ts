@@ -1,6 +1,6 @@
 // Prompts modulares da IA (seção 37). Separados por função. Usados quando
-// AI_PROVIDER != "local". Em modo local, o flow-engine determinístico substitui
-// estes prompts, garantindo funcionamento sem chave de API.
+// AI_PROVIDER != "local". Em modo local, o orquestrador conversacional usa a
+// mesma estrutura com decisões determinísticas, sem depender de chave de API.
 
 export const PROMPT_VERSION = "2.0";
 

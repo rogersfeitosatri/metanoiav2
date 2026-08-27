@@ -1,267 +1,36 @@
-// Conversa adaptativa do Metanoia.
-//
-// A estrutura interna (situação → estado físico → pensamento → emoção → impulso →
-// comportamento → consequência → ponto de decisão → nova possibilidade) é só um mapa
-// nosso. A pessoa NUNCA precisa percorrer todas as etapas: a cada resposta decidimos
-// qual é a próxima pergunta útil — ou se já dá para fechar.
-//
-// Este motor é determinístico e funciona sem chave de API. Quando há LLM configurado,
-// a rota /api/ai/converse melhora a redação, mas preenche exatamente os mesmos campos,
-// então a persistência é idêntica nos dois caminhos.
+import type { ConversationIntent } from "../conversation-intent";
+import {
+  ConversationDecisionSchema,
+  ConversationEngineStateSchema,
+  type ConversationAction,
+  type ConversationCapturedData,
+  type ConversationContext,
+  type ConversationDecision,
+  type ConversationEngineState,
+  type ConversationStage,
+} from "./schemas";
 
-import type { RecoveryOutcome } from "../types";
+export type ConversationState = ConversationEngineState;
 
-export type Slot =
-  | "situation"
-  | "hunger"
-  | "thought"
-  | "emotion"
-  | "behavior"
-  | "consequence"
-  | "recovery"
-  | "alternative"
-  | "belief"
-  | "strategy"
-  | "done";
-
-export interface ConversationState {
-  situation?: string;
-  hunger_level?: number | null;
-  noticed_hunger_early?: boolean;
-  automatic_thought?: string;
-  thought_self_identified?: boolean;
-  emotion?: string;
-  emotion_self_identified?: boolean;
-  behavior?: string;
-  consequence?: string;
-  recovery_outcome?: RecoveryOutcome;
-  all_or_nothing?: boolean;
-  guilt_level?: number | null;
-  alternative?: string;
-  belief_level?: number | null;
-  strategy?: string;
-  /** Quantas perguntas já fizemos — para não virar interrogatório. */
-  asked: Slot[];
+export interface DeterministicTurnResult {
+  decision: ConversationDecision;
+  state: ConversationEngineState;
+  actions: ConversationAction[];
 }
 
-export interface Turn {
-  /** O que o assistente diz agora. */
-  message: string;
-  /** Campo que a próxima resposta vai preencher. */
-  slot: Slot;
-  /** Sugestões clicáveis (a pessoa sempre pode escrever livremente). */
-  quickReplies?: string[];
-  /** Escala 0–10 em vez de texto. */
-  scale?: boolean;
-  /** Encerra a conversa depois desta mensagem. */
-  closing?: boolean;
-}
-
-// ---------- Detecção de sinais no texto livre ----------
-
-const RE = {
-  fomeAlta: /muita fome|morrendo de fome|faminta?o?|sem comer|não almocei|nao almocei|pulei (o )?(almoço|almoco|café|cafe|jantar)|horas sem/i,
-  emocional: /ansios|estress|nervos|briga|brigu|triste|chate|raiva|irrit|frustr|sozinh|entedia|tédio|tedio|cansad|angústia|angustia/i,
-  impulso: /impulso|sem pensar|automátic|automatic|nem percebi|do nada|de repente/i,
-  vontade: /vontade|desejo|fissura|doce|chocolate|queria muito/i,
-  culpa: /culpa|arrepend|me odeio|fracass|vergonha|nojo/i,
-  tudoOuNada: /estraguei tudo|já que|ja que|tanto faz|perdi o dia|acabou mesmo|foda-se|amanhã começo|amanha comeco/i,
-  compensar: /compens|pular|jejum|malhar|treinar|vomit|laxante|não vou comer|nao vou comer/i,
-  perdaControle: /perdi o controle|não consegui parar|nao consegui parar|sem parar|descontrol/i,
-};
-
-export interface Signals {
-  fome: boolean;
-  emocional: boolean;
-  impulso: boolean;
-  vontade: boolean;
-  culpa: boolean;
-  tudoOuNada: boolean;
-  compensar: boolean;
-  perdaControle: boolean;
-}
-
-export function detectSignals(text: string): Signals {
-  return {
-    fome: RE.fomeAlta.test(text),
-    emocional: RE.emocional.test(text),
-    impulso: RE.impulso.test(text),
-    vontade: RE.vontade.test(text),
-    culpa: RE.culpa.test(text),
-    tudoOuNada: RE.tudoOuNada.test(text),
-    compensar: RE.compensar.test(text),
-    perdaControle: RE.perdaControle.test(text),
-  };
-}
-
-// ---------- Aberturas ----------
-
-/** Caminhos oferecidos na entrada da conversa — o app conduz, a pessoa não precisa descobrir. */
-export const ENTRY_OPTIONS = [
-  "Aconteceu uma coisa agora",
-  "Comi mais do que eu queria",
-  "Tô com uma vontade forte",
-  "Tô me sentindo culpado",
-  "Acho que comi por emoção",
-  "Quero entender uma situação",
-  "Quero evitar que aconteça de novo",
+const ENTRY_OPTIONS = [
+  "Quero contar como estou",
+  "Uma refeição foi difícil",
+  "Algo deu certo",
+  "Preciso de apoio agora",
 ];
 
-export function openingMessage(preferredName?: string): Turn {
-  return {
-    message: preferredName
-      ? `Oi, ${preferredName}. O que tá acontecendo?`
-      : "Oi. O que tá acontecendo?",
-    slot: "situation",
-    quickReplies: ENTRY_OPTIONS,
-  };
-}
-
-// ---------- Núcleo adaptativo ----------
-
-/**
- * Decide a próxima pergunta a partir do que já sabemos e do que a pessoa acabou de dizer.
- * A ordem NÃO é fixa: os sinais do relato mudam o caminho.
- */
-export function nextTurn(state: ConversationState, lastMessage: string): Turn {
-  const s = detectSignals(`${lastMessage} ${state.situation || ""}`);
-  const asked = new Set(state.asked);
-
-  // 1) Sem situação ainda: pedir o relato.
-  if (!state.situation) {
-    return {
-      message: "Tá. Me conta o que aconteceu.",
-      slot: "situation",
-    };
-  }
-
-  // 2) Estado físico primeiro quando o relato sugere fome — antes de psicologizar.
-  //    (Ex.: "cheguei em casa e comi tudo que vi pela frente")
-  if (state.hunger_level == null && !asked.has("hunger") && (s.fome || !s.emocional)) {
-    return {
-      message: "Antes disso — tua fome tava quanto, de 0 a 10?",
-      slot: "hunger",
-      scale: true,
-    };
-  }
-
-  // 3) Se a fome estava muito alta, nomeia o fator objetivo e não vira análise emocional.
-  if (
-    state.hunger_level != null &&
-    state.hunger_level >= 8 &&
-    !asked.has("thought") &&
-    !s.emocional
-  ) {
-    return {
-      message: `Então antes de chamar isso de falta de controle: tu chegou nesse momento tentando decidir alguma coisa com fome ${state.hunger_level}/10. Isso muda bastante o jogo. Passou alguma frase pela tua cabeça na hora?`,
-      slot: "thought",
-      quickReplies: ["Não lembro", "Não sei dizer", ...THOUGHT_EXAMPLES.slice(0, 3)],
-    };
-  }
-
-  // 4) Emoção primeiro quando o relato é claramente emocional.
-  if (s.emocional && !state.emotion && !asked.has("emotion")) {
-    return {
-      message: "O que tu tava sentindo bem ali, antes de comer?",
-      slot: "emotion",
-      quickReplies: ["Ansiedade", "Raiva", "Tristeza", "Frustração", "Tédio", "Não sei nomear"],
-    };
-  }
-
-  // 5) Pensamento automático — sem colocar palavras na boca da pessoa.
-  if (!state.automatic_thought && !asked.has("thought")) {
-    return {
-      message: "Teve alguma frase que passou pela tua cabeça nessa hora?",
-      slot: "thought",
-      quickReplies: ["Não lembro", "Não sei dizer"],
-    };
-  }
-
-  // 5b) A pessoa não conseguiu nomear: aí sim oferecemos exemplos, só para reconhecer.
-  if (
-    state.automatic_thought &&
-    /^(não lembro|nao lembro|não sei|nao sei|sei lá|sei la)/i.test(state.automatic_thought) &&
-    !asked.has("thought_examples" as Slot)
-  ) {
-    return {
-      message: "Tranquilo. Alguma dessas se parece com o que passou?",
-      slot: "thought",
-      quickReplies: [...THOUGHT_EXAMPLES, "Nenhuma dessas"],
-    };
-  }
-
-  // 6) Emoção (se ainda não temos e já falamos do pensamento).
-  if (!state.emotion && !asked.has("emotion")) {
-    return {
-      message: "E o que tu tava sentindo nesse momento?",
-      slot: "emotion",
-      quickReplies: ["Ansiedade", "Raiva", "Tristeza", "Frustração", "Tédio", "Culpa", "Não sei nomear"],
-    };
-  }
-
-  // 7) Tudo-ou-nada: questionamento socrático em vez de frase de efeito.
-  if (hasAllOrNothing(state, s) && !state.alternative && !asked.has("alternative")) {
-    const t = state.automatic_thought || "já estraguei tudo";
-    if (!asked.has("consequence")) {
-      return {
-        message: `Quando tu fala “${shorten(t)}” — o que exatamente foi estragado?`,
-        slot: "consequence",
-      };
-    }
-    return {
-      message:
-        "Uma refeição ter saído diferente significa necessariamente que a próxima também precisa sair?",
-      slot: "alternative",
-      quickReplies: ["Não, não precisa", "Na prática acaba saindo", "Nunca pensei nisso"],
-    };
-  }
-
-  // 8) O que aconteceu depois — desfecho é o que mais importa para nós.
-  if (!state.recovery_outcome && !asked.has("recovery")) {
-    return {
-      message: "E depois disso, como foi o resto do dia?",
-      slot: "recovery",
-      quickReplies: [
-        "Segui normalmente depois",
-        "Demorei, mas retomei",
-        "Acabei largando o resto do dia",
-        "Tentei compensar depois",
-      ],
-    };
-  }
-
-  // 9) Construir o pensamento alternativo — a pessoa é quem formula.
-  if (state.automatic_thought && !state.alternative && !asked.has("alternative")) {
-    return {
-      message: `Qual seria uma forma mais justa de olhar pra isso? Do teu jeito, não precisa ser bonito.`,
-      slot: "alternative",
-    };
-  }
-
-  // 10) Quanto ela acredita nessa nova leitura (mede se é real ou só bonita).
-  if (state.alternative && state.belief_level == null && !asked.has("belief")) {
-    return {
-      message: "De 0 a 10, quanto tu acredita nisso agora?",
-      slot: "belief",
-      scale: true,
-    };
-  }
-
-  // 11) Fechamento com algo concreto para a próxima vez.
-  if (!state.strategy && !asked.has("strategy")) {
-    return {
-      message: "Se acontecer parecido de novo, tem uma coisa pequena que dá pra fazer diferente?",
-      slot: "strategy",
-      quickReplies: buildStrategySuggestions(state, s),
-    };
-  }
-
-  return {
-    message: closingLine(state),
-    slot: "done",
-    closing: true,
-  };
-}
+const MEAL_STATUS_REPLIES = [
+  "Realizei",
+  "Realizei em parte",
+  "Não realizei",
+  "Prefiro só conversar",
+];
 
 const THOUGHT_EXAMPLES = [
   "Já estraguei tudo",
@@ -270,107 +39,1006 @@ const THOUGHT_EXAMPLES = [
   "Depois eu compenso",
   "Não consigo me controlar",
   "Já que comecei, tanto faz",
-  "Amanhã começo de novo",
 ];
 
-function shorten(t: string): string {
-  return t.length > 40 ? t.slice(0, 40).trim() + "…" : t.replace(/\.$/, "");
+const RE = {
+  clarification:
+    /^\s*(n[ãa]o entendi|como assim|n[ãa]o saquei|explica melhor|pode explicar|o que quer dizer)\b/i,
+  unknown:
+    /^\s*(n[ãa]o sei|sei l[áa]|n[ãa]o fa[cç]o ideia|dif[ií]cil responder|nunca pensei nisso|n[ãa]o lembro|sla)\b/i,
+  hunger:
+    /muita fome|morrendo de fome|famint|fome\s*(?:de|tava|estava|era)?\s*(?:10|[7-9])\b|sem comer|n[ãa]o almocei|pulei (?:o )?(?:almo[cç]o|caf[eé]|jantar)|horas sem/i,
+  bodyDeprivation:
+    /sem comer|n[ãa]o (?:almocei|jantei|tomei caf[eé])|pulei (?:o )?(?:almo[cç]o|caf[eé]|jantar)|desde (?:o )?(?:almo[cç]o|caf[eé]|jantar)|horas sem/i,
+  foodEvent:
+    /comi|comer|comendo|refei[cç][aã]o|almo[cç]o|jantar|lanche|doce|chocolate|comida/i,
+  emotional:
+    /ansios|estress|nervos|briga|triste|chate|raiva|irrit|frustr|sozinh|entedia|t[eé]dio|cansad|ang[uú]stia/i,
+  urge: /impulso|sem pensar|autom[aá]tic|nem percebi|do nada|vontade|desejo|fissura/i,
+  guilt: /culpa|arrepend|me odeio|fracass|vergonha|nojo/i,
+  allOrNothing:
+    /estraguei tudo|j[aá] que|tanto faz|perdi o dia|acabou mesmo|amanh[ãa] come[cç]o|larguei o dia/i,
+  decline: /n[ãa]o quero|prefiro n[ãa]o|deixa pra l[aá]|s[oó] registrar/i,
+};
+
+export interface ConversationSignals {
+  hunger: boolean;
+  bodyDeprivation: boolean;
+  foodEvent: boolean;
+  emotional: boolean;
+  urge: boolean;
+  guilt: boolean;
+  allOrNothing: boolean;
 }
 
-function hasAllOrNothing(state: ConversationState, s: Signals): boolean {
-  return Boolean(state.all_or_nothing) || s.tudoOuNada ||
-    RE.tudoOuNada.test(state.automatic_thought || "");
+export function detectSignals(text: string): ConversationSignals {
+  return {
+    hunger: RE.hunger.test(text),
+    bodyDeprivation: RE.bodyDeprivation.test(text),
+    foodEvent: RE.foodEvent.test(text),
+    emotional: RE.emotional.test(text),
+    urge: RE.urge.test(text),
+    guilt: RE.guilt.test(text),
+    allOrNothing: RE.allOrNothing.test(text),
+  };
 }
 
-function buildStrategySuggestions(state: ConversationState, s: Signals): string[] {
-  const out: string[] = [];
-  if ((state.hunger_level ?? 0) >= 7 || s.fome) {
-    out.push("Comer alguma coisa antes de chegar nesse horário");
-    out.push("Reparar na fome no meio da tarde");
+export function createConversationState(
+  intent: ConversationIntent,
+  context: ConversationContext
+): ConversationEngineState {
+  const pending = context.pending_strategies[0];
+  const dueMeal = context.meals.find((meal) => meal.due);
+  let stage: ConversationStage = "situation";
+
+  if (intent === "prepare") stage = "prepare_situation";
+  if (intent === "review_strategy") stage = "strategy_review";
+  if (intent === "meal_checkin") stage = dueMeal ? "meal_status" : "meal_selection";
+  if (intent === "default" && pending) stage = "strategy_review";
+  else if (intent === "default" && dueMeal) stage = "meal_status";
+
+  return ConversationEngineStateSchema.parse({
+    intent,
+    stage,
+    asked: [],
+    pending_strategy_id: stage === "strategy_review" ? pending?.id : undefined,
+    pending_strategy_title: stage === "strategy_review" ? pending?.title : undefined,
+    meal_schedule_id: stage === "meal_status" ? dueMeal?.id : undefined,
+    meal_name: stage === "meal_status" ? dueMeal?.name : undefined,
+  });
+}
+
+export function createOpeningTurn(
+  intent: ConversationIntent,
+  context: ConversationContext
+): DeterministicTurnResult {
+  const state = createConversationState(intent, context);
+  let decision: ConversationDecision;
+
+  if (state.stage === "strategy_review" && state.pending_strategy_title) {
+    decision = decisionOf(
+      `Na última vez, tu pensou em testar “${state.pending_strategy_title}”. Chegou a experimentar em alguma situação?`,
+      "strategy_review",
+      ["Ajudou", "Ajudou em parte", "Não ajudou", "Ainda não testei"]
+    );
+  } else if (state.stage === "meal_status") {
+    decision = decisionOf(
+      `${state.meal_name || "Essa refeição"} estava prevista para agora. Como foi para ti?`,
+      "meal_status",
+      MEAL_STATUS_REPLIES
+    );
+  } else if (intent === "help_now") {
+    decision = decisionOf("O que tá pegando agora?", "situation", [
+      "Vontade de comer",
+      "Culpa depois de comer",
+      "Ansiedade ou estresse",
+      "Quero me preparar",
+    ]);
+  } else if (intent === "register_event") {
+    decision = decisionOf("Tá. Me conta o que aconteceu.", "situation");
+  } else if (intent === "prepare") {
+    decision = decisionOf("O que tu quer se preparar para enfrentar?", "prepare_situation");
+  } else if (intent === "review_strategy") {
+    decision = decisionOf("Qual estratégia tu quer avaliar?", "strategy_review");
+  } else if (intent === "meal_checkin") {
+    decision = decisionOf(
+      "Qual refeição tu quer registrar?",
+      "meal_selection",
+      context.meals.length
+        ? context.meals.slice(0, 5).map((meal) => meal.name)
+        : ["Café da manhã", "Almoço", "Lanche", "Jantar", "Outra"]
+    );
+  } else {
+    const name = context.preferred_name ? `, ${context.preferred_name}` : "";
+    decision = decisionOf(
+      `Oi${name}. Como tu chega para esta conversa hoje?`,
+      "situation",
+      ENTRY_OPTIONS
+    );
   }
-  if (s.emocional || state.emotion) out.push("Perceber a emoção antes de decidir");
-  if (s.impulso || s.vontade) out.push("Esperar alguns minutos antes de decidir");
-  out.push("Retomar na próxima refeição, sem compensar");
-  return [...new Set(out)].slice(0, 4);
+
+  return finish(state, decision, []);
 }
 
-function closingLine(state: ConversationState): string {
-  if (state.alternative) {
-    return `Fechou. Guardei isso: “${shorten(state.alternative)}”. Quando aparecer situação parecida, eu te lembro pra gente ver se funcionou.`;
+export function runDeterministicTurn(
+  rawState: ConversationEngineState,
+  rawMessage: string,
+  context: ConversationContext
+): DeterministicTurnResult {
+  const message = rawMessage.trim();
+  let state = ConversationEngineStateSchema.parse(rawState);
+
+  if (state.stage === "done") {
+    state = createConversationState("default", context);
+    state.stage = "situation";
   }
-  return "Fechou. Guardei essa situação. Se acontecer parecido, é só voltar aqui.";
-}
 
-/** Aplica a resposta da pessoa ao slot correspondente. */
-export function applyAnswer(
-  state: ConversationState,
-  slot: Slot,
-  raw: string,
-  numeric?: number
-): ConversationState {
-  const next: ConversationState = { ...state, asked: [...state.asked, slot] };
-  const s = detectSignals(raw);
+  if (RE.clarification.test(message)) {
+    const next = { ...state, clarification_count: state.clarification_count + 1 };
+    return finish(next, rephraseStage(next, context), []);
+  }
 
-  switch (slot) {
-    case "situation":
-      next.situation = raw;
-      if (s.tudoOuNada) next.all_or_nothing = true;
-      break;
-    case "hunger":
-      next.hunger_level = numeric ?? null;
-      // Perceber a fome cedo = não ter chegado no limite.
-      if (numeric != null) next.noticed_hunger_early = numeric <= 6;
-      break;
-    case "thought": {
-      const naoSabe = /^(não lembro|nao lembro|não sei|nao sei|sei lá|sei la|nenhuma dessas)/i.test(raw);
-      if (!naoSabe) {
-        next.automatic_thought = raw;
-        // Se veio da lista de exemplos, não foi identificação espontânea.
-        next.thought_self_identified = !THOUGHT_EXAMPLES.includes(raw);
-        if (RE.tudoOuNada.test(raw)) next.all_or_nothing = true;
+  if (RE.unknown.test(message)) {
+    const next = { ...state, unknown_count: state.unknown_count + 1 };
+    return finish(next, alternatePath(next, context), []);
+  }
+
+  if (state.stage === "situation") {
+    if (/^\s*(quero me preparar|me preparar|preparar uma situa[cç][aã]o)\s*$/i.test(message)) {
+      return finish(
+        { ...state, intent: "prepare", stage: "prepare_situation" },
+        decisionOf("O que tu quer se preparar para enfrentar?", "prepare_situation"),
+        []
+      );
+    }
+    if (/^\s*preciso de apoio agora\s*$/i.test(message)) {
+      return finish(
+        { ...state, intent: "help_now" },
+        decisionOf("O que tá pegando agora?", "situation"),
+        []
+      );
+    }
+    if (/^\s*uma refei[cç][aã]o foi dif[ií]cil\s*$/i.test(message)) {
+      return finish(
+        state,
+        decisionOf("Tá. O que aconteceu nessa refeição?", "situation"),
+        []
+      );
+    }
+    if (/^\s*algo deu certo\s*$/i.test(message)) {
+      return finish(
+        state,
+        decisionOf("O que aconteceu e ajudou esse momento a dar certo?", "meal_success"),
+        []
+      );
+    }
+    if (/^\s*quero contar como estou\s*$/i.test(message)) {
+      return finish(state, decisionOf("Como tu tá agora?", "situation"), []);
+    }
+  }
+
+  const currentStage = state.stage;
+  const next: ConversationEngineState = {
+    ...state,
+    asked: [...new Set([...state.asked, currentStage])],
+  };
+  const actions: ConversationAction[] = [];
+  const signals = detectSignals(`${message} ${state.situation || ""}`);
+  let decision: ConversationDecision;
+
+  switch (currentStage) {
+    case "situation": {
+      next.situation = message;
+      const hunger = extractHunger(message);
+      if (hunger != null) {
+        next.hunger_level = hunger;
+        next.noticed_hunger_early = hunger <= 6;
+      }
+      if (signals.bodyDeprivation) next.physical_context = message;
+      if (signals.allOrNothing) {
+        next.automatic_thought = extractThought(message);
+        next.thought_self_identified = true;
+        next.all_or_nothing = true;
+      }
+      if (signals.guilt) next.guilt_level = 7;
+
+      if (next.hunger_level != null && next.hunger_level >= 7) {
+        decision = highHungerDecision(next);
+      } else if (
+        next.hunger_level == null &&
+        (signals.hunger || signals.bodyDeprivation || signals.foodEvent || signals.urge)
+      ) {
+        decision = decisionOf(
+          "Antes de procurar outro motivo, tua fome tava quanto de 0 a 10?",
+          "hunger",
+          ["Até 3", "Entre 4 e 6", "7 ou mais"]
+        );
+      } else if (next.all_or_nothing) {
+        decision = allOrNothingDecision(next);
+      } else if (signals.emotional) {
+        decision = decisionOf(
+          "O que tava mais forte em ti nesse momento?",
+          "emotion",
+          ["Ansiedade", "Raiva", "Tristeza", "Frustração", "Cansaço", "Não sei"]
+        );
       } else {
-        next.automatic_thought = raw; // guarda o "não lembro" para ramificar
-        next.thought_self_identified = false;
+        decision = decisionOf(
+          "Antes disso, como estava tua fome de 0 a 10?",
+          "hunger",
+          ["Até 3", "Entre 4 e 6", "7 ou mais"]
+        );
       }
       break;
     }
-    case "emotion": {
-      const naoSabe = /não sei nomear|nao sei nomear/i.test(raw);
-      next.emotion = naoSabe ? undefined : raw;
-      next.emotion_self_identified = !naoSabe;
-      if (s.culpa) next.guilt_level = 7;
+
+    case "hunger": {
+      const hunger = extractHunger(message);
+      if (hunger == null) {
+        return finish(
+          { ...state, clarification_count: state.clarification_count + 1 },
+          decisionOf(
+            "Pode ser aproximado: 0 é sem fome e 10 é fome muito forte. Em qual número tu tava?",
+            "hunger",
+            ["2", "5", "8", "10"],
+            { needsClarification: true }
+          ),
+          []
+        );
+      }
+      next.hunger_level = hunger;
+      next.noticed_hunger_early = hunger <= 6;
+      if (hunger >= 7) {
+        decision = highHungerDecision(next);
+      } else if (next.all_or_nothing || signals.allOrNothing) {
+        decision = allOrNothingDecision(next);
+      } else if (detectSignals(next.situation || "").emotional) {
+        decision = decisionOf(
+          `Tá. A fome tava ${hunger}/10. O que tava mais forte em ti nessa hora?`,
+          "emotion",
+          ["Ansiedade", "Raiva", "Tristeza", "Frustração", "Cansaço", "Não sei"]
+        );
+      } else {
+        decision = decisionOf(
+          `Tá. A fome tava ${hunger}/10. Teve alguma frase que passou pela tua cabeça?`,
+          "thought",
+          ["Não lembro", "Não sei dizer"]
+        );
+      }
       break;
     }
-    case "behavior":
-      next.behavior = raw;
+
+    case "physical_context": {
+      next.physical_context = mergeText(next.physical_context, message);
+      if (next.all_or_nothing) {
+        decision = allOrNothingDecision(next);
+      } else {
+        decision = decisionOf(
+          `Então a fome ${next.hunger_level ?? "alta"}/10 chegou junto com esse contexto físico. O que passou pela tua cabeça quando foi decidir o que comer?`,
+          "thought",
+          ["Não lembro", "Não sei dizer"]
+        );
+      }
       break;
-    case "consequence":
-      next.consequence = raw;
+    }
+
+    case "thought": {
+      next.automatic_thought = message;
+      next.thought_self_identified = !THOUGHT_EXAMPLES.includes(message);
+      next.all_or_nothing = signals.allOrNothing;
+      if (signals.allOrNothing) {
+        decision = allOrNothingDecision(next);
+      } else {
+        decision = decisionOf(
+          "E o que tu tava sentindo nessa hora?",
+          "emotion",
+          ["Ansiedade", "Raiva", "Tristeza", "Frustração", "Culpa", "Não sei"]
+        );
+      }
       break;
-    case "recovery":
-      next.recovery_outcome = mapRecovery(raw);
+    }
+
+    case "emotion": {
+      next.emotion = message;
+      next.emotion_self_identified = true;
+      if (signals.guilt) next.guilt_level = 7;
+      decision = decisionOf(
+        "Entendi. E depois disso, como foi o resto do dia?",
+        "recovery",
+        [
+          "Segui normalmente depois",
+          "Demorei, mas retomei",
+          "Acabei largando o resto do dia",
+          "Tentei compensar depois",
+        ]
+      );
       break;
-    case "alternative":
-      next.alternative = raw;
+    }
+
+    case "consequence": {
+      next.consequence = message;
+      decision = decisionOf(
+        "Uma refeição sair diferente significa que a próxima também precisa sair?",
+        "alternative",
+        ["Não, não precisa", "Na prática acaba saindo", "Nunca pensei nisso"]
+      );
       break;
-    case "belief":
-      next.belief_level = numeric ?? null;
+    }
+
+    case "recovery": {
+      next.recovery_outcome = mapRecovery(message);
+      decision = decisionOf(
+        "Olhando agora, tem uma coisa pequena que seria possível fazer diferente numa próxima vez?",
+        "strategy",
+        buildStrategySuggestions(next)
+      );
       break;
-    case "strategy":
-      next.strategy = raw;
+    }
+
+    case "alternative": {
+      next.alternative = message;
+      decision = next.recovery_outcome
+        ? decisionOf(
+            "O que ajudaria essa leitura a aparecer na hora em que isso acontece?",
+            "strategy",
+            buildStrategySuggestions(next)
+          )
+        : decisionOf(
+            "E depois daquele momento, como foi o resto do dia?",
+            "recovery",
+            [
+              "Segui normalmente depois",
+              "Demorei, mas retomei",
+              "Acabei largando o resto do dia",
+              "Tentei compensar depois",
+            ]
+          );
       break;
+    }
+
+    case "strategy": {
+      if (!RE.decline.test(message)) {
+        next.strategy = message;
+        next.strategy_recorded = true;
+        actions.push({ type: "create_strategy_trial", title: message });
+      }
+      addDifficultyAction(next, actions);
+      decision = decisionOf(
+        next.strategy
+          ? `Fechou. A ideia fica como um teste: “${shorten(next.strategy)}”. Depois a gente olha se ajudou de verdade.`
+          : "Tá. O que tu contou ficou registrado, sem forçar uma estratégia agora.",
+        "done",
+        [],
+        { kind: "closing", suggestClose: true }
+      );
+      break;
+    }
+
+    case "prepare_situation": {
+      next.situation = message;
+      decision = decisionOf("O que parece mais difícil nessa situação?", "prepare_obstacle");
+      break;
+    }
+
+    case "prepare_obstacle": {
+      next.preparation_obstacle = message;
+      const suggestions = buildPreparationSuggestions(message, context);
+      decision = decisionOf(
+        "Pensando nisso, qual dessas ações parece realmente possível?",
+        "prepare_action",
+        suggestions,
+        {
+          strategyProposal: suggestions[0]
+            ? { title: suggestions[0], accepted_by_user: false }
+            : undefined,
+        }
+      );
+      break;
+    }
+
+    case "prepare_action": {
+      if (!RE.decline.test(message)) {
+        next.strategy = message;
+        next.strategy_recorded = true;
+        actions.push({ type: "create_strategy_trial", title: message });
+      }
+      decision = decisionOf(
+        next.strategy
+          ? `Combinado. Isso fica como um teste para essa situação: “${shorten(next.strategy)}”.`
+          : "Tá. A preparação fica aberta, sem te prender a uma estratégia agora.",
+        "done",
+        [],
+        { kind: "closing", suggestClose: true }
+      );
+      break;
+    }
+
+    case "strategy_review": {
+      if (!next.pending_strategy_title) {
+        next.pending_strategy_title = message;
+        decision = decisionOf(
+          `Tá. Pensando em “${shorten(message)}”, tu chegou a testar isso?`,
+          "strategy_review",
+          ["Ajudou", "Ajudou em parte", "Não ajudou", "Ainda não testei"]
+        );
+        break;
+      }
+      const result = mapStrategyResult(message);
+      next.strategy_review_result = result;
+      if (result !== "not_tested" && next.pending_strategy_id) {
+        actions.push({
+          type: "update_strategy_trial",
+          strategy_trial_id: next.pending_strategy_id,
+          result,
+          feedback: message,
+          title: next.pending_strategy_title,
+        });
+        if (result === "helped" || result === "partially_helped") {
+          actions.push({
+            type: "save_memory",
+            memory: {
+              memory_kind: "protective_factor",
+              topic: "estrategia_testada",
+              content: next.pending_strategy_title,
+              source: "user",
+              validation_status: "confirmed",
+              confidence: 1,
+            },
+          });
+        }
+      }
+      decision = decisionOf(
+        result === "not_tested"
+          ? "Ela continua como possibilidade, não como algo que já funciona."
+          : result === "did_not_help"
+            ? "Tá. Então essa estratégia não ajudou nessa situação, e isso também é informação útil."
+            : "Entendi. Vou guardar que ela ajudou nessa situação, sem tratar como solução para tudo.",
+        "done",
+        [],
+        { kind: "closing", suggestClose: true }
+      );
+      break;
+    }
+
+    case "meal_selection": {
+      const meal = findMeal(message, context);
+      next.meal_schedule_id = meal?.id ?? null;
+      next.meal_name = meal?.name || message;
+      decision = decisionOf(`Como foi ${next.meal_name}?`, "meal_status", MEAL_STATUS_REPLIES);
+      break;
+    }
+
+    case "meal_status": {
+      if (/prefiro/i.test(message)) {
+        next.intent = "default";
+        next.stage = "situation";
+        decision = decisionOf("Tá. O que tu quer conversar agora?", "situation");
+        break;
+      }
+      const status = mapMealStatus(message);
+      if (!status) {
+        return finish(
+          { ...state, clarification_count: state.clarification_count + 1 },
+          decisionOf(
+            "Quis dizer se a refeição aconteceu, aconteceu em parte ou não aconteceu. Qual se aproxima mais?",
+            "meal_status",
+            MEAL_STATUS_REPLIES,
+            { needsClarification: true }
+          ),
+          []
+        );
+      }
+      next.meal_status = status;
+      next.checkin_recorded = true;
+      actions.push({
+        type: "create_meal_checkin",
+        schedule_id: next.meal_schedule_id ?? null,
+        meal_name: next.meal_name ?? null,
+        status,
+      });
+      decision = status === "completed"
+        ? decisionOf("O que ajudou essa refeição a acontecer desse jeito?", "meal_success")
+        : decisionOf(
+            "Tu prefere só registrar ou quer entender o que tornou esse momento mais difícil?",
+            "meal_difficulty_consent",
+            ["Só registrar", "Quero entender"]
+          );
+      break;
+    }
+
+    case "meal_difficulty_consent": {
+      if (RE.decline.test(message) || /s[oó] registrar/i.test(message)) {
+        decision = decisionOf(
+          "Registrado. Não precisa transformar toda refeição em análise.",
+          "done",
+          [],
+          { kind: "closing", suggestClose: true }
+        );
+      } else {
+        next.situation = next.situation || `Dificuldade em ${next.meal_name || "uma refeição"}`;
+        decision = decisionOf(
+          "Primeiro, como estava tua fome naquele momento de 0 a 10?",
+          "hunger",
+          ["Até 3", "Entre 4 e 6", "7 ou mais"]
+        );
+      }
+      break;
+    }
+
+    case "meal_success": {
+      actions.push({
+        type: "save_memory",
+        memory: {
+          memory_kind: "protective_factor",
+          topic: next.meal_name || "refeicao",
+          content: message,
+          source: "user",
+          validation_status: "confirmed",
+          confidence: 1,
+        },
+      });
+      decision = decisionOf(
+        "Guardei isso como algo que ajudou nessa refeição.",
+        "done",
+        [],
+        { kind: "closing", suggestClose: true }
+      );
+      break;
+    }
+
   }
-  return next;
+
+  const captured = toCapturedData(next);
+  decision = ConversationDecisionSchema.parse({
+    ...decision,
+    captured_data: Object.keys(captured).length ? captured : undefined,
+  });
+  return finish(next, decision, actions);
 }
 
-function mapRecovery(raw: string): RecoveryOutcome {
-  if (/segui normalmente|retomei na próxima|retomei na proxima|normal/i.test(raw)) return "retomou";
-  if (/demorei/i.test(raw)) return "retomou_depois";
-  if (/larg|abandon|resto do dia|desisti/i.test(raw)) return "abandonou_dia";
-  if (/compens|pulei|jejum|treinar|malhar/i.test(raw)) return "compensou";
+export function validateModelDecision(
+  candidate: ConversationDecision,
+  fallback: ConversationDecision,
+  state: ConversationEngineState,
+  message: string
+): ConversationDecision {
+  const parsed = ConversationDecisionSchema.parse(candidate);
+  if (fallback.needs_clarification) return fallback;
+  if (countQuestions(parsed.reply) > 1) return fallback;
+  if (containsBannedCliche(parsed.reply)) return fallback;
+  if (!isStageCompatible(parsed.next_stage, state)) return fallback;
+  if (asksKnownField(parsed.next_stage, state)) return fallback;
+
+  const mustStayPhysical =
+    fallback.next_stage === "hunger" || fallback.next_stage === "physical_context";
+  if (mustStayPhysical && parsed.next_stage !== fallback.next_stage) return fallback;
+
+  const memoryUpdates = parsed.memory_updates.map((memory) => {
+    const directUserFact =
+      memory.source === "user" && normalize(message).includes(normalize(memory.content));
+    if (directUserFact) {
+      return { ...memory, validation_status: "confirmed" as const, confidence: 1 };
+    }
+    return {
+      ...memory,
+      source: "ai" as const,
+      validation_status: "proposed" as const,
+      confidence: Math.min(memory.confidence, 0.75),
+    };
+  });
+
+  const strategyProposal = parsed.strategy_proposal
+    ? {
+        ...parsed.strategy_proposal,
+        accepted_by_user:
+          parsed.strategy_proposal.accepted_by_user &&
+          (state.stage === "strategy" || state.stage === "prepare_action"),
+      }
+    : undefined;
+
+  return ConversationDecisionSchema.parse({
+    ...parsed,
+    captured_data: {
+      ...(parsed.captured_data || {}),
+      ...(fallback.captured_data || {}),
+    },
+    memory_updates: memoryUpdates,
+    strategy_proposal: strategyProposal,
+  });
+}
+
+export function actionsFromModelDecision(
+  decision: ConversationDecision
+): ConversationAction[] {
+  return decision.memory_updates.map((memory) => ({
+    type: "save_memory" as const,
+    memory,
+  }));
+}
+
+function decisionOf(
+  reply: string,
+  nextStage: ConversationStage,
+  quickReplies: string[] = [],
+  options: {
+    kind?: ConversationDecision["response_kind"];
+    needsClarification?: boolean;
+    suggestClose?: boolean;
+    strategyProposal?: ConversationDecision["strategy_proposal"];
+  } = {}
+): ConversationDecision {
+  return ConversationDecisionSchema.parse({
+    reply,
+    quick_replies: quickReplies,
+    next_stage: nextStage,
+    response_kind: options.kind || (nextStage === "done" ? "closing" : "question"),
+    needs_clarification: options.needsClarification || false,
+    strategy_proposal: options.strategyProposal,
+    suggest_close: options.suggestClose || false,
+  });
+}
+
+function finish(
+  state: ConversationEngineState,
+  decision: ConversationDecision,
+  actions: ConversationAction[]
+): DeterministicTurnResult {
+  const nextState = ConversationEngineStateSchema.parse({
+    ...state,
+    stage: decision.next_stage,
+    last_question: decision.reply,
+  });
+  return {
+    decision: ConversationDecisionSchema.parse(decision),
+    state: nextState,
+    actions,
+  };
+}
+
+function rephraseStage(
+  state: ConversationEngineState,
+  context: ConversationContext
+): ConversationDecision {
+  const replies = clarificationCopy(state, context);
+  return decisionOf(
+    `Foi mal, falei meio complicado. ${replies.reply}`,
+    state.stage,
+    replies.quickReplies,
+    { needsClarification: true }
+  );
+}
+
+function alternatePath(
+  state: ConversationEngineState,
+  context: ConversationContext
+): ConversationDecision {
+  const byStage: Partial<Record<ConversationStage, { reply: string; quickReplies?: string[] }>> = {
+    situation: {
+      reply: "Tá. Vamos por um exemplo concreto: qual foi a última situação com comida que te incomodou?",
+      quickReplies: ["Hoje", "Ontem", "No fim de semana", "Prefiro falar de agora"],
+    },
+    hunger: {
+      reply: "Pensa nos sinais do corpo: vazio no estômago, fraqueza ou irritação. Tava mais perto de fome baixa, média ou alta?",
+      quickReplies: ["Baixa", "Média", "Alta"],
+    },
+    physical_context: {
+      reply: "Vamos pelo relógio: fazia pouco tempo ou muitas horas desde que tu tinha comido?",
+      quickReplies: ["Pouco tempo", "Algumas horas", "Muitas horas"],
+    },
+    thought: {
+      reply: "Alguma dessas frases chega perto do que passou, mesmo que não seja exatamente isso?",
+      quickReplies: [...THOUGHT_EXAMPLES.slice(0, 5), "Nenhuma dessas"],
+    },
+    emotion: {
+      reply: "Vamos pelo corpo: tava mais acelerado, pesado, irritado ou meio desligado?",
+      quickReplies: ["Acelerado", "Pesado", "Irritado", "Desligado"],
+    },
+    consequence: {
+      reply: "Na prática, o que mudou depois: a próxima refeição, teu humor ou o resto do dia?",
+      quickReplies: ["A próxima refeição", "Meu humor", "O resto do dia"],
+    },
+    recovery: {
+      reply: "Depois disso, tu conseguiu seguir normalmente ou aquilo continuou pesando?",
+      quickReplies: ["Segui normalmente", "Pesou por um tempo", "Larguei o resto do dia", "Compensei"],
+    },
+    alternative: {
+      reply: "Se fosse com alguém que tu gosta, essa refeição provaria que a pessoa estragou o dia inteiro?",
+      quickReplies: ["Não", "Talvez", "Nunca pensei assim"],
+    },
+    strategy: {
+      reply: "Pensa numa ação bem pequena para a próxima vez. Qual dessas chega mais perto?",
+      quickReplies: buildStrategySuggestions(state),
+    },
+    prepare_situation: {
+      reply: "Pensa numa situação que vai acontecer em breve. Onde tu vai estar?",
+    },
+    prepare_obstacle: {
+      reply: "Nessa situação, o que pode apertar mais: fome, falta de opção, pressão das pessoas ou emoção?",
+      quickReplies: ["Fome", "Falta de opção", "Pressão das pessoas", "Emoção"],
+    },
+    prepare_action: {
+      reply: "Qual seria a menor preparação possível antes de chegar lá?",
+      quickReplies: buildPreparationSuggestions(state.preparation_obstacle || "", context),
+    },
+    strategy_review: {
+      reply: state.pending_strategy_title
+        ? "Quando tu testou isso, ajudou, ajudou só em parte ou não ajudou?"
+        : "Qual era a ação que tu queria testar?",
+      quickReplies: state.pending_strategy_title
+        ? ["Ajudou", "Ajudou em parte", "Não ajudou", "Ainda não testei"]
+        : undefined,
+    },
+    meal_selection: {
+      reply: "Quis dizer qual momento tu quer registrar: café, almoço, lanche, jantar ou outro?",
+      quickReplies: context.meals.length
+        ? context.meals.slice(0, 5).map((meal) => meal.name)
+        : ["Café da manhã", "Almoço", "Lanche", "Jantar", "Outra"],
+    },
+    meal_status: {
+      reply: "Quis dizer se a refeição aconteceu, aconteceu em parte ou não aconteceu. Qual foi?",
+      quickReplies: MEAL_STATUS_REPLIES,
+    },
+    meal_success: {
+      reply: "O que tornou essa refeição mais fácil hoje? Pode ser horário, organização, companhia ou outra coisa.",
+      quickReplies: ["Horário", "Organização", "Companhia", "Outra coisa"],
+    },
+    meal_difficulty_consent: {
+      reply: "Tu quer só deixar o registro ou olhar comigo o que dificultou?",
+      quickReplies: ["Só registrar", "Quero entender"],
+    },
+  };
+  const copy = byStage[state.stage] || {
+    reply: "Não sei se peguei bem essa parte. Me explica de outro jeito?",
+  };
+  return decisionOf(copy.reply, state.stage, copy.quickReplies || [], {
+    needsClarification: true,
+  });
+}
+
+function clarificationCopy(
+  state: ConversationEngineState,
+  context: ConversationContext
+): { reply: string; quickReplies: string[] } {
+  const alternative = alternatePath(state, context);
+  return { reply: alternative.reply, quickReplies: alternative.quick_replies };
+}
+
+function highHungerDecision(state: ConversationEngineState): ConversationDecision {
+  if (state.physical_context) {
+    return decisionOf(
+      `Antes de culpar tua força de vontade, tem um dado concreto: tua fome tava ${state.hunger_level}/10. Isso costuma acontecer ou hoje foi diferente?`,
+      "physical_context",
+      ["Costuma acontecer", "Hoje foi diferente"]
+    );
+  }
+  return decisionOf(
+    `Tua fome tava ${state.hunger_level}/10. Quanto tempo fazia desde que tu tinha comido?`,
+    "physical_context",
+    ["Até 2 horas", "De 3 a 5 horas", "Mais de 5 horas"]
+  );
+}
+
+function allOrNothingDecision(state: ConversationEngineState): ConversationDecision {
+  const thought = state.automatic_thought || "já estraguei tudo";
+  return decisionOf(
+    `Quando tu fala “${shorten(thought)}”, o que exatamente foi estragado?`,
+    "consequence"
+  );
+}
+
+function addDifficultyAction(
+  state: ConversationEngineState,
+  actions: ConversationAction[]
+) {
+  if (
+    state.difficulty_recorded ||
+    !state.situation ||
+    !(
+      state.hunger_level != null ||
+      state.automatic_thought ||
+      state.emotion ||
+      state.recovery_outcome
+    )
+  ) {
+    return;
+  }
+  const data = toCapturedData(state);
+  actions.push({ type: "record_difficulty", data });
+  state.difficulty_recorded = true;
+}
+
+function toCapturedData(state: ConversationEngineState): ConversationCapturedData {
+  const reasons = [
+    (state.hunger_level ?? 0) >= 7 ? "Fome alta" : "",
+    state.emotion || "",
+    state.all_or_nothing ? "Pensamento tudo-ou-nada" : "",
+  ].filter(Boolean);
+  return {
+    reasons: reasons.length ? reasons : undefined,
+    situation: state.situation,
+    physical_context: state.physical_context,
+    automatic_thought: state.automatic_thought,
+    emotion: state.emotion,
+    behavior: state.behavior,
+    consequences: state.consequence,
+    hunger_intensity: state.hunger_level ?? undefined,
+    emotional_intensity: state.guilt_level ?? undefined,
+    recovery_outcome: state.recovery_outcome,
+    all_or_nothing: state.all_or_nothing,
+    thought_self_identified: state.thought_self_identified,
+    emotion_self_identified: state.emotion_self_identified,
+  };
+}
+
+function buildStrategySuggestions(state: ConversationEngineState): string[] {
+  const suggestions: string[] = [];
+  if ((state.hunger_level ?? 0) >= 7) {
+    suggestions.push("Perceber a fome um pouco antes");
+    suggestions.push("Evitar passar tantas horas sem comer");
+  }
+  if (state.emotion) suggestions.push("Dar nome ao que estou sentindo antes de decidir");
+  if (state.all_or_nothing) suggestions.push("Retomar na próxima refeição, sem compensar");
+  suggestions.push("Fazer uma pausa curta antes de decidir");
+  return [...new Set(suggestions)].slice(0, 4);
+}
+
+function buildPreparationSuggestions(
+  obstacle: string,
+  context: ConversationContext
+): string[] {
+  const suggestions: string[] = [];
+  if (/fome|hor[aá]rio|tempo|reuni[aã]o/i.test(obstacle)) {
+    suggestions.push("Olhar a fome antes de chegar nessa situação");
+    suggestions.push("Organizar uma alternativa prática com antecedência");
+  }
+  if (/press[aã]o|pessoa|coment[aá]rio/i.test(obstacle)) {
+    suggestions.push("Pensar antes no que quero responder");
+  }
+  if (/ansios|emo[cç][aã]o|estress|culpa/i.test(obstacle)) {
+    suggestions.push("Fazer uma pausa curta antes de decidir");
+  }
+  suggestions.push(...context.effective_strategies);
+  suggestions.push("Escolher uma ação pequena e realista");
+  return [...new Set(suggestions)].slice(0, 4);
+}
+
+function extractHunger(text: string): number | null {
+  const normalized = normalize(text);
+  const numeric = normalized.match(
+    /(?:fome\s*(?:tava|estava|era|de)?\s*|^)(10|[0-9])(?:\s*\/\s*10)?\b/
+  );
+  if (numeric) return Number(numeric[1]);
+  if (
+    /^(alta|muita|forte)$/.test(normalized) ||
+    /fome.{0,12}(alta|muita|forte)|morrendo de fome|7 ou mais/.test(normalized)
+  ) return 8;
+  if (/m[eé]dia|entre 4 e 6/i.test(text)) return 5;
+  if (/baixa|at[eé] 3|pouca/i.test(text)) return 2;
+  return null;
+}
+
+function extractThought(text: string): string {
+  const match = text.match(/(j[aá] estraguei tudo|tanto faz|amanh[ãa] come[cç]o[^.!?]*)/i);
+  return match?.[1] || text;
+}
+
+function mapRecovery(
+  text: string
+): ConversationEngineState["recovery_outcome"] {
+  if (/segui normalmente|retomei na pr[oó]xima|normal/i.test(text)) return "retomou";
+  if (/demorei|pesou por um tempo/i.test(text)) return "retomou_depois";
+  if (/larg|abandon|resto do dia|desisti/i.test(text)) return "abandonou_dia";
+  if (/compens|pulei|jejum|treinar|malhar/i.test(text)) return "compensou";
   return "indefinido";
 }
 
-export function emptyState(): ConversationState {
-  return { asked: [] };
+function mapStrategyResult(
+  text: string
+): NonNullable<ConversationEngineState["strategy_review_result"]> {
+  if (/em parte/i.test(text)) return "partially_helped";
+  if (/n[ãa]o ajudou/i.test(text)) return "did_not_help";
+  if (/ainda n[ãa]o|n[ãa]o testei|situa[cç][aã]o n[ãa]o/i.test(text)) return "not_tested";
+  if (/ajudou|funcionou/i.test(text)) return "helped";
+  return "not_tested";
+}
+
+function mapMealStatus(
+  text: string
+): ConversationEngineState["meal_status"] | null {
+  if (/em parte|parcial/i.test(text)) return "partial";
+  if (/n[ãa]o realizei|n[ãa]o aconteceu|n[ãa]o fiz/i.test(text)) return "not_completed";
+  if (/realizei|aconteceu|fiz/i.test(text)) return "completed";
+  return null;
+}
+
+function findMeal(message: string, context: ConversationContext) {
+  const wanted = normalize(message);
+  return context.meals.find((meal) => normalize(meal.name) === wanted);
+}
+
+function asksKnownField(
+  stage: ConversationStage,
+  state: ConversationEngineState
+): boolean {
+  const known: Partial<Record<ConversationStage, unknown>> = {
+    situation: state.situation,
+    hunger: state.hunger_level,
+    physical_context: state.physical_context,
+    thought: state.automatic_thought,
+    emotion: state.emotion,
+    consequence: state.consequence,
+    recovery: state.recovery_outcome,
+    alternative: state.alternative,
+    strategy: state.strategy,
+    prepare_situation: state.situation,
+    prepare_obstacle: state.preparation_obstacle,
+    meal_selection: state.meal_name,
+    meal_status: state.meal_status,
+  };
+  return known[stage] !== undefined && stage !== state.stage;
+}
+
+function isStageCompatible(
+  candidate: ConversationStage,
+  state: ConversationEngineState
+): boolean {
+  const current = state.stage;
+  const preparation: ConversationStage[] = [
+    "prepare_situation",
+    "prepare_obstacle",
+    "prepare_action",
+    "strategy",
+    "done",
+  ];
+  const review: ConversationStage[] = ["strategy_review", "strategy", "done"];
+  const meal: ConversationStage[] = [
+    "meal_selection",
+    "meal_status",
+    "meal_success",
+    "meal_difficulty_consent",
+    "situation",
+    "hunger",
+    "physical_context",
+    "thought",
+    "emotion",
+    "consequence",
+    "recovery",
+    "alternative",
+    "strategy",
+    "done",
+  ];
+  if (preparation.includes(current)) return preparation.includes(candidate);
+  if (review.includes(current)) return review.includes(candidate);
+  if (meal.includes(current) && current.startsWith("meal_")) {
+    return meal.includes(candidate);
+  }
+  return !candidate.startsWith("meal_") && !candidate.startsWith("prepare_");
+}
+
+function containsBannedCliche(reply: string): boolean {
+  return /uma escolha n[ãa]o define sua jornada|seja gentil consigo|honre seu processo|pratique autocompaix[aã]o|excelente reflex[aã]o|parab[eé]ns por reconhecer|como voc[eê] deseja cuidar de si/i.test(
+    reply
+  );
+}
+
+function countQuestions(text: string): number {
+  return (text.match(/\?/g) || []).length;
+}
+
+function mergeText(current: string | undefined, addition: string): string {
+  if (!current) return addition;
+  if (normalize(current).includes(normalize(addition))) return current;
+  return `${current} ${addition}`.slice(0, 1000);
+}
+
+function shorten(text: string): string {
+  const trimmed = text.trim().replace(/[.!?]+$/, "");
+  return trimmed.length > 90 ? `${trimmed.slice(0, 90).trim()}...` : trimmed;
+}
+
+function normalize(text: string): string {
+  return text
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase("pt-BR")
+    .trim();
 }

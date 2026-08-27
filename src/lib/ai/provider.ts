@@ -22,10 +22,10 @@ export class LocalProvider implements AIProvider {
   name = "local";
   async generateStructuredResponse<T>(input: AIInput, schema: ZodSchema<T>): Promise<T> {
     // O provedor local não é chamado diretamente para gerar texto livre;
-    // as funções de alto nível (flow-engine, reports) já produzem estrutura.
+    // os orquestradores de alto nível já produzem estrutura.
     // Este método existe para compatibilidade de interface.
     throw new Error(
-      "LocalProvider não gera texto livre. Use os módulos determinísticos (flow-engine, reports)."
+      "LocalProvider não gera texto livre. Use os orquestradores determinísticos."
     );
     return schema.parse({}) as T;
   }

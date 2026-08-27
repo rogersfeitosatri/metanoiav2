@@ -34,14 +34,14 @@ const SIGNALS: Signal[] = [
     severity: "high",
     patterns: [/laxante|lax[ea]/i],
     message:
-      "Vou registrar isso com cuidado. O uso de laxantes para compensar traz riscos importantes. Vale conversar com o profissional que te acompanha para pensar em um caminho mais seguro.",
+      "O uso de laxantes para compensar traz riscos importantes. Vale conversar com o profissional que te acompanha para pensar em um caminho mais seguro.",
   },
   {
     category: "medicamento",
     severity: "medium",
     patterns: [/rem[ée]dio para (n[ãa]o comer|emagrecer)|tomei (v[áa]rios )?comprimidos|abusei do rem[ée]dio/i],
     message:
-      "Percebo que tu mencionou o uso de medicamentos de um jeito que merece atenção. Isso é importante conversar com o profissional que te acompanha. Vou registrar para dar esse suporte.",
+      "Tu mencionou o uso de medicamentos de um jeito que merece atenção. Isso é importante conversar com o profissional que te acompanha.",
   },
   {
     category: "restricao_severa",
