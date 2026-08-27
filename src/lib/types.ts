@@ -98,6 +98,7 @@ export type CheckinStatus = "completed" | "partial" | "not_completed";
 export interface MealCheckin {
   id: string;
   user_id: string;
+  episode_id?: string | null;
   schedule_id?: string | null;
   meal_type?: MealType | null;
   custom_meal_name?: string | null;
@@ -146,6 +147,7 @@ export interface UserMemory {
 export interface DifficultyEvent {
   id: string;
   user_id: string;
+  episode_id?: string | null;
   checkin_id?: string | null;
   conversation_id?: string | null;
   occurred_at: string;
@@ -254,6 +256,7 @@ export type SenderType = "user" | "assistant" | "system" | "professional";
 export interface ConversationMessage {
   id: string;
   conversation_id: string;
+  episode_id?: string | null;
   sender_type: SenderType;
   content: string;
   structured_content?: Record<string, unknown> | null;
@@ -297,6 +300,7 @@ export type TrialResult =
 export interface StrategyTrial {
   id: string;
   user_id: string;
+  episode_id?: string | null;
   strategy_id: string;
   difficulty_event_id?: string | null;
   planned_for?: string | null;
@@ -304,6 +308,64 @@ export interface StrategyTrial {
   result: TrialResult;
   user_feedback?: string | null;
   title_snapshot: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export type EpisodeIntent =
+  | "default"
+  | "help_now"
+  | "register_event"
+  | "prepare"
+  | "review_strategy"
+  | "meal_checkin";
+
+export type BehavioralEpisodeType =
+  | "open"
+  | "event"
+  | "help_now"
+  | "preparation"
+  | "strategy_review"
+  | "meal_checkin";
+
+export type BehavioralEpisodeStatus =
+  | "active"
+  | "resolved"
+  | "waiting_followup"
+  | "abandoned";
+
+export type EventTimePrecision =
+  | "exact"
+  | "approximate"
+  | "date_only"
+  | "relative"
+  | "unknown";
+
+// Uma situação específica trabalhada dentro do histórico visual de conversa.
+export interface BehavioralEpisode {
+  id: string;
+  user_id: string;
+  conversation_id: string;
+  episode_type: BehavioralEpisodeType;
+  entry_intent: EpisodeIntent;
+  current_intent: EpisodeIntent;
+  status: BehavioralEpisodeStatus;
+  started_at: string;
+  ended_at?: string | null;
+  situation?: string | null;
+  event_occurred_at?: string | null;
+  event_time_description?: string | null;
+  event_time_precision?: EventTimePrecision | null;
+  current_stage?: string | null;
+  awaiting_field?: string | null;
+  conversation_state: Record<string, unknown>;
+  result_summary?: string | null;
+  followup_required: boolean;
+  followup_reason?: string | null;
+  followup_at?: string | null;
+  related_meal_checkin_id?: string | null;
+  related_strategy_trial_id?: string | null;
+  related_difficulty_event_id?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -454,6 +516,7 @@ export interface Database {
   thought_records: ThoughtRecord[];
   alternative_thoughts: AlternativeThought[];
   conversations: Conversation[];
+  behavioral_episodes: BehavioralEpisode[];
   conversation_messages: ConversationMessage[];
   strategies: Strategy[];
   strategy_trials: StrategyTrial[];

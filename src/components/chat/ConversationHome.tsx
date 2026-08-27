@@ -7,7 +7,21 @@ import {
   CONVERSATION_INTENT_CONFIG,
   isExplicitConversationIntent,
   parseConversationIntent,
+  type ConversationIntent,
 } from "@/lib/conversation-intent";
+import {
+  abandonEpisodePatch,
+  inferIntentFromNewDemand,
+  initialEpisodeFields,
+  isExplicitNewDemand,
+  patchEpisodeEventMoment,
+  patchEpisodeFromTurn,
+  resumeEpisodePrompt,
+  resumeLastQuestion,
+  resolveFollowupEpisodePatch,
+  selectEpisodeForEntry,
+  type EpisodeRelations,
+} from "@/lib/behavioral-episodes";
 import {
   ConversationEngineResponseSchema,
   ConversationEngineStateSchema,
@@ -16,12 +30,18 @@ import {
   type ConversationEngineState,
 } from "@/lib/ai/schemas";
 import { useStore } from "@/lib/store";
-import type { Conversation, ConversationMessage, MealSchedule } from "@/lib/types";
+import type {
+  BehavioralEpisode,
+  Conversation,
+  ConversationMessage,
+  MealSchedule,
+} from "@/lib/types";
 
 type Bubble = {
   id: string;
   from: "assistant" | "user" | "safety";
   text: string;
+  episodeId?: string | null;
 };
 
 export function ConversationHome() {
@@ -37,6 +57,9 @@ export function ConversationHome() {
   const [error, setError] = useState<string | null>(null);
   const initializedEntryRef = useRef<string | null>(null);
   const conversationRef = useRef<Conversation | null>(null);
+  const episodeRef = useRef<BehavioralEpisode | null>(null);
+  const activeIntentRef = useRef<ConversationIntent>(intent);
+  const awaitingResumeChoiceRef = useRef(false);
   const engineStateRef = useRef<ConversationEngineState | null>(null);
   const activeCheckinRef = useRef<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -47,6 +70,9 @@ export function ConversationHome() {
     initializedEntryRef.current = entryKey;
 
     conversationRef.current = null;
+    episodeRef.current = null;
+    activeIntentRef.current = intent;
+    awaitingResumeChoiceRef.current = false;
     engineStateRef.current = null;
     activeCheckinRef.current = null;
     setBubbles([]);
@@ -56,47 +82,123 @@ export function ConversationHome() {
     setError(null);
 
     const config = CONVERSATION_INTENT_CONFIG[intent];
+    const selection = selectEpisodeForEntry(store.db.behavioral_episodes, {
+      userId,
+      intent,
+      isReload: isPageReload(),
+    });
+    let episode = selection.kind === "create" ? null : selection.episode;
     const explicitIntent = isExplicitConversationIntent(intent);
-    const existing = explicitIntent
-      ? undefined
-      : store.db.conversations
-          .filter(
-            (item) =>
-              item.user_id === userId &&
-              item.type === "open_chat" &&
-              item.status === "open"
-          )
-          .sort(
-            (a, b) =>
-              new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
-          )[0];
-    const conversation =
-      existing ||
-      store.createConversation(userId, config.conversationType, config.title);
+    let conversation = episode
+      ? store.db.conversations.find((item) => item.id === episode?.conversation_id)
+      : undefined;
+    if (!conversation) {
+      const existing = explicitIntent
+        ? undefined
+        : store.db.conversations
+            .filter(
+              (item) =>
+                item.user_id === userId &&
+                item.type === "open_chat" &&
+                item.status === "open"
+            )
+            .sort(
+              (a, b) =>
+                new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+            )[0];
+      conversation =
+        existing ||
+        store.createConversation(userId, config.conversationType, config.title);
+      episode = null;
+    }
     conversationRef.current = conversation;
 
-    const existingMessages = store.db.conversation_messages.filter(
-      (item) => item.conversation_id === conversation.id
+    const episodeWasCreated = !episode;
+    if (!episode) {
+      episode = store.createEpisode({
+        user_id: userId,
+        conversation_id: conversation.id,
+        ...initialEpisodeFields(intent),
+      });
+    }
+    episodeRef.current = episode;
+    activeIntentRef.current = episode.current_intent;
+
+    const existingMessages = store.db.conversation_messages
+      .filter((item) => item.conversation_id === conversation.id)
+      .sort(
+        (a, b) =>
+          new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      );
+    const episodeMessages = existingMessages.filter(
+      (message) => message.episode_id === episode?.id
     );
     if (existingMessages.length) {
       setBubbles(existingMessages.map(toBubble));
-      const stateMessage = existingMessages
+    }
+
+    let parsedState = ConversationEngineStateSchema.safeParse(
+      episode.conversation_state
+    );
+    if (!parsedState.success) {
+      const compatibleMessages = episodeWasCreated
+        ? existingMessages.filter((message) => !message.episode_id)
+        : episodeMessages;
+      const stateMessage = compatibleMessages
         .slice()
         .reverse()
         .find((message) => message.structured_content?.engine_state);
-      const parsedState = ConversationEngineStateSchema.safeParse(
+      parsedState = ConversationEngineStateSchema.safeParse(
         stateMessage?.structured_content?.engine_state
       );
       if (parsedState.success) {
-        engineStateRef.current = parsedState.data;
-        activeCheckinRef.current = parsedState.data.active_checkin_id || null;
+        const patch = {
+          conversation_state: parsedState.data as unknown as Record<string, unknown>,
+          current_stage: parsedState.data.stage,
+          awaiting_field: parsedState.data.stage === "done" ? null : parsedState.data.stage,
+          situation: parsedState.data.situation || episode.situation || null,
+          current_intent: parsedState.data.intent,
+        };
+        Object.assign(episode, patch);
+        store.updateEpisode(episode.id, patch);
       }
-      const last = existingMessages.at(-1);
-      setQuickReplies(
-        last?.sender_type === "assistant" ? last.quick_replies || [] : []
-      );
-      if (parsedState.success) return;
     }
+
+    if (parsedState.success) {
+      engineStateRef.current = parsedState.data;
+      activeIntentRef.current = parsedState.data.intent;
+      activeCheckinRef.current =
+        parsedState.data.active_checkin_id || episode.related_meal_checkin_id || null;
+    }
+
+    const lastEpisodeMessage = (episodeMessages.length
+      ? episodeMessages
+      : episodeWasCreated
+        ? existingMessages.filter((message) => !message.episode_id)
+        : []
+    ).at(-1);
+    setQuickReplies(
+      lastEpisodeMessage?.sender_type === "assistant"
+        ? lastEpisodeMessage.quick_replies || []
+        : []
+    );
+
+    if (selection.kind === "offer_resume" && !episodeWasCreated) {
+      awaitingResumeChoiceRef.current = true;
+      setBubbles((current) => [
+        ...current,
+        {
+          id: `resume-${episode.id}`,
+          from: "assistant",
+          text: resumeEpisodePrompt(episode),
+          episodeId: episode.id,
+        },
+      ]);
+      setQuickReplies(["Continuar aquilo", "Falar de outra coisa"]);
+      return;
+    }
+
+    if (parsedState.success) return;
 
     void requestEngine("start", undefined, existingMessages.map(toBubble));
     // O motor recebe toda dependência variável no contexto do request.
@@ -118,10 +220,15 @@ export function ConversationHome() {
     displayFrom: Bubble["from"] = sender
   ) {
     const id = crypto.randomUUID();
-    setBubbles((current) => [...current, { id, from: displayFrom, text }]);
+    const episodeId = episodeRef.current?.id || null;
+    setBubbles((current) => [
+      ...current,
+      { id, from: displayFrom, text, episodeId },
+    ]);
     if (conversationRef.current) {
       store.addMessage({
         conversation_id: conversationRef.current.id,
+        episode_id: episodeId,
         sender_type: sender,
         content: text,
         structured_content: structured,
@@ -133,12 +240,128 @@ export function ConversationHome() {
   async function send(value = draft) {
     const text = value.trim();
     if (!text || typing) return;
-    const history = [...bubbles, { id: "pending", from: "user" as const, text }];
-    persist("user", text);
     setDraft("");
     setQuickReplies([]);
     setError(null);
+
+    if (awaitingResumeChoiceRef.current) {
+      await handleResumeChoice(text);
+      return;
+    }
+
+    if (episodeRef.current?.status !== "active") {
+      beginNewEpisode(inferIntentFromNewDemand(text), false);
+    } else if (isExplicitNewDemand(text)) {
+      beginNewEpisode(inferIntentFromNewDemand(text), true);
+    }
+
+    updateEventMoment(text);
+    const history = [
+      ...bubbles,
+      {
+        id: "pending",
+        from: "user" as const,
+        text,
+        episodeId: episodeRef.current?.id || null,
+      },
+    ];
+    persist("user", text);
+    const boundaryOnly = /^\s*(?:agora\s+)?aconteceu\s+outra\s+coisa[.!]?\s*$/i.test(text);
+    if (boundaryOnly) {
+      await requestEngine("start", undefined, history);
+      return;
+    }
     await requestEngine("message", text, history);
+  }
+
+  async function handleResumeChoice(text: string) {
+    awaitingResumeChoiceRef.current = false;
+    if (/continuar/i.test(text)) {
+      persist("user", text);
+      const episode = episodeRef.current;
+      if (!episode || !engineStateRef.current) {
+        await requestEngine("start");
+        return;
+      }
+      const replies = lastRepliesForEpisode(episode.id);
+      persist(
+        "assistant",
+        resumeLastQuestion(episode),
+        replies,
+        {
+          engine_state: engineStateRef.current,
+          source: "episode_resume",
+        }
+      );
+      setQuickReplies(replies);
+      return;
+    }
+
+    if (/falar de outra coisa|outro assunto/i.test(text)) {
+      persist("user", text);
+      beginNewEpisode("default", true);
+      await requestEngine("start");
+      return;
+    }
+
+    beginNewEpisode(inferIntentFromNewDemand(text), true);
+    updateEventMoment(text);
+    const history = [
+      ...bubbles,
+      {
+        id: "pending",
+        from: "user" as const,
+        text,
+        episodeId: episodeRef.current?.id || null,
+      },
+    ];
+    persist("user", text);
+    await requestEngine("message", text, history);
+  }
+
+  function beginNewEpisode(nextIntent: ConversationIntent, abandonCurrent: boolean) {
+    const conversation = conversationRef.current;
+    if (!conversation) return null;
+    const previous = episodeRef.current;
+    if (abandonCurrent && previous?.status === "active") {
+      const patch = abandonEpisodePatch();
+      Object.assign(previous, patch);
+      store.updateEpisode(previous.id, patch);
+    }
+    const next = store.createEpisode({
+      user_id: userId,
+      conversation_id: conversation.id,
+      ...initialEpisodeFields(nextIntent),
+    });
+    episodeRef.current = next;
+    activeIntentRef.current = nextIntent;
+    engineStateRef.current = null;
+    activeCheckinRef.current = null;
+    awaitingResumeChoiceRef.current = false;
+    return next;
+  }
+
+  function updateEventMoment(text: string) {
+    const episode = episodeRef.current;
+    if (!episode) return;
+    const patch = patchEpisodeEventMoment(episode, text);
+    if (!Object.keys(patch).length) return;
+    Object.assign(episode, patch);
+    store.updateEpisode(episode.id, patch);
+  }
+
+  function lastRepliesForEpisode(episodeId: string): string[] {
+    return (
+      store.db.conversation_messages
+        .filter(
+          (message) =>
+            message.episode_id === episodeId && message.sender_type === "assistant"
+        )
+        .sort(
+          (a, b) =>
+            new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        )[0]?.quick_replies || []
+    );
   }
 
   async function requestEngine(
@@ -156,12 +379,15 @@ export function ConversationHome() {
           operation,
           message,
           conversation_id: conversationRef.current?.id,
-          intent,
+          intent: activeIntentRef.current,
           state: engineStateRef.current || undefined,
-          history: history.slice(-20).map((item) => ({
-            from: item.from === "user" ? "user" : "assistant",
-            text: item.text,
-          })),
+          history: history
+            .filter((item) => item.episodeId === episodeRef.current?.id)
+            .slice(-20)
+            .map((item) => ({
+              from: item.from === "user" ? "user" : "assistant",
+              text: item.text,
+            })),
           context: buildContext(),
         }),
       });
@@ -179,7 +405,14 @@ export function ConversationHome() {
       }
       const data = parsed.data;
       engineStateRef.current = data.state;
-      applyActions(data.actions);
+      activeIntentRef.current = data.state.intent;
+      const relations = applyActions(data.actions);
+      const episode = episodeRef.current;
+      if (episode) {
+        const patch = patchEpisodeFromTurn(episode, data, relations);
+        Object.assign(episode, patch);
+        store.updateEpisode(episode.id, patch);
+      }
       persist(
         "assistant",
         data.reply,
@@ -208,48 +441,79 @@ export function ConversationHome() {
     }
   }
 
-  function applyActions(actions: ConversationAction[]) {
+  function applyActions(actions: ConversationAction[]): EpisodeRelations {
+    const relations: EpisodeRelations = {};
+    const episodeId = episodeRef.current?.id || null;
     for (const action of actions) {
       if (action.type === "create_meal_checkin") {
         const checkin = store.addCheckin({
           user_id: userId,
+          episode_id: episodeId,
           schedule_id: action.schedule_id,
           custom_meal_name: action.meal_name,
           status: action.status,
         });
         activeCheckinRef.current = checkin.id;
+        relations.mealCheckinId = checkin.id;
         if (engineStateRef.current) {
           engineStateRef.current.active_checkin_id = checkin.id;
         }
       } else if (action.type === "record_difficulty") {
-        store.recordDifficulty(
+        const recorded = store.recordDifficulty(
           userId,
           action.data,
           conversationRef.current?.id,
           activeCheckinRef.current ||
             engineStateRef.current?.active_checkin_id ||
-            undefined
+            undefined,
+          episodeId || undefined
         );
+        relations.difficultyEventId = recorded.event.id;
       } else if (action.type === "save_memory") {
         store.saveMemory({
           ...action.memory,
           source_conversation_id: conversationRef.current?.id || null,
         });
       } else if (action.type === "create_strategy_trial") {
-        store.addStrategyTrial({
+        const plannedFor = new Date(Date.now() + 86400000).toISOString();
+        const trial = store.addStrategyTrial({
           user_id: userId,
+          episode_id: episodeId,
           title_snapshot: action.title,
           result: "not_tested",
-          planned_for: new Date(Date.now() + 86400000).toISOString(),
+          planned_for: plannedFor,
         });
+        relations.strategyTrialId = trial.id;
+        relations.strategyPlannedFor = plannedFor;
       } else if (action.type === "update_strategy_trial") {
         store.updateStrategyTrial(action.strategy_trial_id, {
           result: action.result,
           tested_at: new Date().toISOString(),
           user_feedback: action.feedback,
         });
+        relations.strategyTrialId = action.strategy_trial_id;
+        const originalEpisode = store.db.behavioral_episodes.find(
+          (episode) =>
+            episode.id !== episodeId &&
+            episode.status === "waiting_followup" &&
+            episode.related_strategy_trial_id === action.strategy_trial_id
+        );
+        if (originalEpisode) {
+          store.updateEpisode(
+            originalEpisode.id,
+            resolveFollowupEpisodePatch(
+              `Acompanhamento concluído: ${action.feedback}`
+            )
+          );
+        }
       }
     }
+    if (relations.strategyTrialId && relations.difficultyEventId) {
+      store.updateStrategyTrial(relations.strategyTrialId, {
+        difficulty_event_id: relations.difficultyEventId,
+      });
+    }
+    return relations;
   }
 
   function buildContext(): ConversationContext {
@@ -385,7 +649,16 @@ function toBubble(message: ConversationMessage): Bubble {
           ? "user"
           : "assistant",
     text: message.content,
+    episodeId: message.episode_id ?? null,
   };
+}
+
+function isPageReload(): boolean {
+  if (typeof performance === "undefined") return false;
+  const navigation = performance.getEntriesByType(
+    "navigation"
+  ) as PerformanceNavigationTiming[];
+  return navigation.at(-1)?.type === "reload";
 }
 
 function findRelevantMeal(schedules: MealSchedule[]) {

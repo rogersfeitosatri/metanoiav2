@@ -527,6 +527,7 @@ export function buildDemoDatabase(): Database {
       },
     ],
     conversations,
+    behavioral_episodes: [],
     conversation_messages: messages,
     strategies: GLOBAL_STRATEGIES,
     strategy_trials: trials,

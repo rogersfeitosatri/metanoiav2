@@ -21,8 +21,10 @@ import type {
   MealSchedule,
   UserMemory,
   MemoryKind,
+  BehavioralEpisode,
 } from "./types";
 import type { ConversationState } from "./ai/conversation";
+import type { EpisodeCreateInput } from "./behavioral-episodes";
 import { buildDemoDatabase, uid, USER_ID, ADMIN_ID } from "./demo-data";
 import { computeConsistency } from "./consistency";
 import { classifyPatterns, type PatternSummary } from "./patterns";
@@ -30,7 +32,7 @@ import { buildWeeklyReport } from "./reports";
 import { analyzeSafetyLocal } from "./ai/safety";
 import { isSupabaseConfigured } from "./supabase/config";
 import { createClient } from "./supabase/client";
-import { loadDatabase, newId, clean } from "./supabase/data";
+import { loadDatabase, newId, clean, withDatabaseDefaults } from "./supabase/data";
 
 const DB_KEY = "metanoia_db_v1";
 const SESSION_KEY = "metanoia_session_v1";
@@ -56,13 +58,15 @@ interface StoreValue {
     userId: string,
     answers: Record<string, unknown>,
     conversationId?: string,
-    checkinId?: string
+    checkinId?: string,
+    episodeId?: string
   ) => { event: DifficultyEvent; thought: ThoughtRecord };
   /** Salva uma situação vinda da conversa adaptativa (evento + registro de pensamento). */
   recordSituation: (
     userId: string,
     state: ConversationState,
-    conversationId?: string
+    conversationId?: string,
+    episodeId?: string
   ) => { event: DifficultyEvent; thought: ThoughtRecord };
   addAlternativeThought: (
     input: Partial<AlternativeThought> & { user_id: string; original_thought: string; alternative: string }
@@ -70,6 +74,8 @@ interface StoreValue {
   updateAlternativeThought: (id: string, patch: Partial<AlternativeThought>) => void;
   saveCopingCard: (userId: string, patch: Partial<CopingCard>) => void;
   createConversation: (userId: string, type: Conversation["type"], title: string) => Conversation;
+  createEpisode: (input: EpisodeCreateInput) => BehavioralEpisode;
+  updateEpisode: (id: string, patch: Partial<BehavioralEpisode>) => void;
   addMessage: (msg: Omit<ConversationMessage, "id" | "created_at">) => ConversationMessage;
   closeConversation: (conversationId: string, summary?: string) => void;
   addStrategyTrial: (input: Partial<StrategyTrial> & { user_id: string; title_snapshot: string }) => StrategyTrial;
@@ -135,11 +141,8 @@ function loadLocalDb(): Database {
   try {
     const raw = localStorage.getItem(DB_KEY);
     if (raw) {
-      const saved = JSON.parse(raw) as Database;
-      return {
-        ...saved,
-        alternative_thoughts: saved.alternative_thoughts || [],
-      };
+      const saved = JSON.parse(raw) as Partial<Database>;
+      return withDatabaseDefaults(saved);
     }
   } catch {
     /* ignora */
@@ -153,6 +156,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const supabaseRef = useRef<SupabaseClient | null>(null);
+  const supabaseWritesRef = useRef<Promise<void>>(Promise.resolve());
 
   // ---------- Inicialização ----------
   useEffect(() => {
@@ -216,23 +220,42 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // ---------- write-through helpers (supabase) ----------
-  const sbInsert = useCallback(async (table: string, row: Record<string, unknown>) => {
-    if (!SB || !supabaseRef.current) return;
-    const { error } = await supabaseRef.current.from(table).insert(clean(row));
-    if (error) console.warn(`insert ${table}:`, error.message);
+  const enqueueSupabaseWrite = useCallback((label: string, operation: () => Promise<void>) => {
+    if (!SB) return;
+    supabaseWritesRef.current = supabaseWritesRef.current
+      .then(operation)
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`${label}:`, message);
+      });
   }, []);
 
-  const sbUpsert = useCallback(async (table: string, row: Record<string, unknown>, onConflict: string) => {
-    if (!SB || !supabaseRef.current) return;
-    const { error } = await supabaseRef.current.from(table).upsert(clean(row), { onConflict });
-    if (error) console.warn(`upsert ${table}:`, error.message);
-  }, []);
+  const sbInsert = useCallback((table: string, row: Record<string, unknown>) => {
+    const client = supabaseRef.current;
+    if (!SB || !client) return;
+    enqueueSupabaseWrite(`insert ${table}`, async () => {
+      const { error } = await client.from(table).insert(clean(row));
+      if (error) throw error;
+    });
+  }, [enqueueSupabaseWrite]);
 
-  const sbUpdate = useCallback(async (table: string, id: string, patch: Record<string, unknown>) => {
-    if (!SB || !supabaseRef.current) return;
-    const { error } = await supabaseRef.current.from(table).update(clean(patch)).eq("id", id);
-    if (error) console.warn(`update ${table}:`, error.message);
-  }, []);
+  const sbUpsert = useCallback((table: string, row: Record<string, unknown>, onConflict: string) => {
+    const client = supabaseRef.current;
+    if (!SB || !client) return;
+    enqueueSupabaseWrite(`upsert ${table}`, async () => {
+      const { error } = await client.from(table).upsert(clean(row), { onConflict });
+      if (error) throw error;
+    });
+  }, [enqueueSupabaseWrite]);
+
+  const sbUpdate = useCallback((table: string, id: string, patch: Record<string, unknown>) => {
+    const client = supabaseRef.current;
+    if (!SB || !client) return;
+    enqueueSupabaseWrite(`update ${table}`, async () => {
+      const { error } = await client.from(table).update(clean(patch)).eq("id", id);
+      if (error) throw error;
+    });
+  }, [enqueueSupabaseWrite]);
 
   // Atualiza o estado local (e persiste no localStorage apenas em modo demo).
   const mutate = useCallback((fn: (draft: Database) => void) => {
@@ -329,6 +352,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const refreshDatabase = useCallback(async () => {
     if (!SB || !supabaseRef.current) return;
+    await supabaseWritesRef.current;
     const data = await loadDatabase(supabaseRef.current);
     setDb(data);
   }, []);
@@ -486,6 +510,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const checkin: MealCheckin = {
         id: genId("chk"),
         user_id: input.user_id || currentUserId || USER_ID,
+        episode_id: input.episode_id ?? null,
         schedule_id: input.schedule_id ?? null,
         meal_type: input.meal_type ?? null,
         custom_meal_name: input.custom_meal_name ?? null,
@@ -504,11 +529,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   );
 
   const recordDifficulty: StoreValue["recordDifficulty"] = useCallback(
-    (userId, answers, conversationId, checkinId) => {
+    (userId, answers, conversationId, checkinId, episodeId) => {
       const nowIso = new Date().toISOString();
       const event: DifficultyEvent = {
         id: genId("diff"),
         user_id: userId,
+        episode_id: episodeId || null,
         checkin_id: checkinId || null,
         conversation_id: conversationId || null,
         occurred_at: nowIso,
@@ -556,6 +582,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         trial = {
           id: genId("trial"),
           user_id: userId,
+          episode_id: episodeId || null,
           strategy_id: null as unknown as string,
           difficulty_event_id: event.id,
           planned_for: new Date(Date.now() + 86400000).toISOString(),
@@ -581,7 +608,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   );
 
   const recordSituation: StoreValue["recordSituation"] = useCallback(
-    (userId, s, conversationId) => {
+    (userId, s, conversationId, episodeId) => {
       const nowIso = new Date().toISOString();
       const reasons: string[] = [];
       if ((s.hunger_level ?? 0) >= 7) reasons.push("Estava com muita fome.");
@@ -591,6 +618,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const event: DifficultyEvent = {
         id: genId("diff"),
         user_id: userId,
+        episode_id: episodeId || null,
         checkin_id: null,
         conversation_id: conversationId || null,
         occurred_at: nowIso,
@@ -734,6 +762,57 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     [db.profiles, mutate, sbInsert]
   );
 
+  const createEpisode: StoreValue["createEpisode"] = useCallback(
+    (input) => {
+      const nowIso = new Date().toISOString();
+      const episode: BehavioralEpisode = {
+        id: genId("episode"),
+        user_id: input.user_id,
+        conversation_id: input.conversation_id,
+        episode_type: input.episode_type || "open",
+        entry_intent: input.entry_intent,
+        current_intent: input.current_intent || input.entry_intent,
+        status: "active",
+        started_at: input.started_at || nowIso,
+        ended_at: null,
+        situation: null,
+        event_occurred_at: input.event_occurred_at ?? null,
+        event_time_description: input.event_time_description ?? null,
+        event_time_precision: input.event_time_precision ?? null,
+        current_stage: null,
+        awaiting_field: null,
+        conversation_state: {},
+        result_summary: null,
+        followup_required: false,
+        followup_reason: null,
+        followup_at: null,
+        related_meal_checkin_id: null,
+        related_strategy_trial_id: null,
+        related_difficulty_event_id: null,
+        created_at: nowIso,
+        updated_at: nowIso,
+      };
+      mutate((d) => {
+        d.behavioral_episodes.unshift(episode);
+      });
+      sbInsert("behavioral_episodes", episode as unknown as Record<string, unknown>);
+      return episode;
+    },
+    [mutate, sbInsert]
+  );
+
+  const updateEpisode: StoreValue["updateEpisode"] = useCallback(
+    (id, patch) => {
+      const updated = { ...patch, updated_at: new Date().toISOString() };
+      mutate((d) => {
+        const episode = d.behavioral_episodes.find((item) => item.id === id);
+        if (episode) Object.assign(episode, updated);
+      });
+      sbUpdate("behavioral_episodes", id, updated as Record<string, unknown>);
+    },
+    [mutate, sbUpdate]
+  );
+
   const addMessage: StoreValue["addMessage"] = useCallback(
     (msg) => {
       const full: ConversationMessage = {
@@ -774,6 +853,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const trial: StrategyTrial = {
         id: genId("trial"),
         user_id: input.user_id,
+        episode_id: input.episode_id ?? null,
         strategy_id: input.strategy_id ?? (null as unknown as string),
         difficulty_event_id: input.difficulty_event_id ?? null,
         planned_for: input.planned_for ?? null,
@@ -1045,6 +1125,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     updateAlternativeThought,
     saveCopingCard,
     createConversation,
+    createEpisode,
+    updateEpisode,
     addMessage,
     closeConversation,
     addStrategyTrial,
@@ -1080,7 +1162,7 @@ function emptyDatabase(): Database {
     profiles: [], professionals: [], professional_user_links: [], behavioral_goals: [],
     coping_cards: [], meal_schedules: [], user_memories: [], meal_checkins: [],
     difficulty_events: [], thought_records: [], alternative_thoughts: [],
-    conversations: [], conversation_messages: [], strategies: [], strategy_trials: [],
+    conversations: [], behavioral_episodes: [], conversation_messages: [], strategies: [], strategy_trials: [],
     pattern_snapshots: [], consistency_scores: [], weekly_reports: [], risk_flags: [],
     professional_notes: [], notification_preferences: [], scheduled_interventions: [],
     legal_documents: [], legal_acceptances: [], audit_logs: [],

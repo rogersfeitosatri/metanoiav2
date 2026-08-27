@@ -15,6 +15,7 @@ const TABLES: (keyof Database)[] = [
   "thought_records",
   "alternative_thoughts",
   "conversations",
+  "behavioral_episodes",
   "conversation_messages",
   "strategies",
   "strategy_trials",
@@ -44,6 +45,7 @@ function emptyDb(): Database {
     thought_records: [],
     alternative_thoughts: [],
     conversations: [],
+    behavioral_episodes: [],
     conversation_messages: [],
     strategies: [],
     strategy_trials: [],
@@ -58,6 +60,18 @@ function emptyDb(): Database {
     legal_acceptances: [],
     audit_logs: [],
   };
+}
+
+export function withDatabaseDefaults(saved: Partial<Database>): Database {
+  const defaults = emptyDb();
+  const normalized = { ...defaults, ...saved } as Database;
+  for (const table of TABLES) {
+    if (!Array.isArray(normalized[table])) {
+      // @ts-expect-error todas as colecoes do Database sao arrays
+      normalized[table] = defaults[table];
+    }
+  }
+  return normalized;
 }
 
 // Carrega tudo o que a sessão atual pode ver (a RLS filtra as linhas por papel).
