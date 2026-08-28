@@ -151,6 +151,8 @@ export interface DifficultyEvent {
   checkin_id?: string | null;
   conversation_id?: string | null;
   occurred_at: string;
+  event_time_description?: string | null;
+  event_time_precision?: EventTimePrecision | null;
   primary_reason?: string | null;
   reasons: string[];
   context?: string | null;
@@ -341,6 +343,24 @@ export type EventTimePrecision =
   | "relative"
   | "unknown";
 
+export type BehavioralFactor =
+  | "physical"
+  | "practical"
+  | "emotional"
+  | "cognitive"
+  | "social"
+  | "mixed"
+  | "unknown";
+
+export interface BehavioralEvidence {
+  field: string;
+  value: string;
+  evidence: string;
+  source: "user" | "ai" | "system";
+  status: "reported" | "proposed" | "confirmed";
+  confidence: number;
+}
+
 // Uma situação específica trabalhada dentro do histórico visual de conversa.
 export interface BehavioralEpisode {
   id: string;
@@ -356,6 +376,23 @@ export interface BehavioralEpisode {
   event_occurred_at?: string | null;
   event_time_description?: string | null;
   event_time_precision?: EventTimePrecision | null;
+  context_tags: string[];
+  physical_state: string[];
+  hunger_level?: number | null;
+  satiety_level?: number | null;
+  urge?: string | null;
+  urge_intensity?: number | null;
+  automatic_thought?: string | null;
+  emotions: string[];
+  emotion_intensity?: number | null;
+  behavior?: string | null;
+  immediate_consequence?: string | null;
+  later_consequence?: string | null;
+  recovery_outcome?: RecoveryOutcome | null;
+  compensatory_behavior?: string | null;
+  decision_point?: string | null;
+  main_influencing_factor?: BehavioralFactor | null;
+  captured_evidence: BehavioralEvidence[];
   current_stage?: string | null;
   awaiting_field?: string | null;
   conversation_state: Record<string, unknown>;

@@ -34,6 +34,10 @@ function episode(patch: Partial<BehavioralEpisode> = {}): BehavioralEpisode {
     event_occurred_at: null,
     event_time_description: null,
     event_time_precision: null,
+    context_tags: [],
+    physical_state: [],
+    emotions: [],
+    captured_evidence: [],
     current_stage: "hunger",
     awaiting_field: "hunger",
     conversation_state: {
@@ -165,6 +169,41 @@ describe("estado persistente e ciclo de vida", () => {
     });
   });
 
+  it("persiste a estrutura comportamental no episódio sem perder valores anteriores", () => {
+    const current = episode({
+      emotions: ["ansiedade"],
+      context_tags: ["casa"],
+      captured_evidence: [],
+    });
+    const turn = response({
+      stage: "recovery",
+      context_tags: ["trabalho"],
+      physical_state: ["cansaço"],
+      hunger_level: 3,
+      automatic_thought: "eu mereço alguma coisa boa",
+      emotions: ["raiva"],
+      behavior: "pedi comida",
+      immediate_consequence: "alívio",
+      later_consequence: "culpa",
+      recovery_outcome: "retomou",
+      decision_point: "antes de abrir o aplicativo",
+      main_influencing_factor: "mixed",
+    });
+    const patch = patchEpisodeFromTurn(current, turn, {}, NOW);
+    expect(patch.context_tags).toEqual(["casa", "trabalho"]);
+    expect(patch.emotions).toEqual(["ansiedade", "raiva"]);
+    expect(patch).toMatchObject({
+      physical_state: ["cansaço"],
+      automatic_thought: "eu mereço alguma coisa boa",
+      behavior: "pedi comida",
+      immediate_consequence: "alívio",
+      later_consequence: "culpa",
+      recovery_outcome: "retomou",
+      decision_point: "antes de abrir o aplicativo",
+      main_influencing_factor: "mixed",
+    });
+  });
+
   it("encerra como resolvido quando não há acompanhamento pendente", () => {
     const patch = patchEpisodeFromTurn(
       episode(),
@@ -249,5 +288,13 @@ describe("momento do acontecimento", () => {
 
   it("mantém horário desconhecido como ausente em vez de inventar", () => {
     expect(inferEventMoment("Comi mais do que pretendia no almoço", NOW)).toBeNull();
+  });
+
+  it("registra às 16h mesmo quando a conversa acontece às 22h", () => {
+    const reference = new Date("2026-08-27T22:00:00-03:00");
+    const inferred = inferEventMoment("Isso aconteceu às 16h", reference);
+    expect(inferred?.precision).toBe("exact");
+    expect(new Date(inferred!.occurredAt).getHours()).toBe(16);
+    expect(inferred?.occurredAt).not.toBe(reference.toISOString());
   });
 });

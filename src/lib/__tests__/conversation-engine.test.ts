@@ -153,16 +153,17 @@ describe("adaptação determinística", () => {
       "Isso costuma acontecer",
       EMPTY_CONTEXT
     );
-    expect(second.state.stage).toBe("consequence");
-    expect(second.decision.reply).toContain("o que exatamente foi estragado");
+    expect(second.state.stage).toBe("behavior");
+    expect(second.decision.reply).toContain("acabou fazendo");
     expect(second.decision.reply).not.toContain("quanto");
+    expect(second.decision.reply).not.toMatch(/passou pela tua cabeça/i);
   });
 
   it("examina já estraguei tudo sem frase motivacional pronta", () => {
     const state = createConversationState("register_event", EMPTY_CONTEXT);
     const turn = runDeterministicTurn(state, "Já estraguei tudo mesmo", EMPTY_CONTEXT);
-    expect(turn.state.stage).toBe("consequence");
-    expect(turn.decision.reply).toContain("o que exatamente foi estragado");
+    expect(turn.state.stage).toBe("behavior");
+    expect(turn.decision.reply).toContain("acabou fazendo");
     expect(turn.decision.reply).not.toMatch(/jornada|gentil consigo|processo/i);
   });
 
@@ -268,7 +269,7 @@ describe("contrato, provedor e fallback", () => {
       }
     );
     expect(result.source).toBe("local");
-    expect(result.state.stage).toBe("emotion");
+    expect(result.state.stage).toBe("behavior");
   });
 
   it("falha do provedor não quebra nem perde estágio", async () => {
@@ -282,7 +283,7 @@ describe("contrato, provedor e fallback", () => {
     );
     expect(result.source).toBe("local");
     expect(result.state.intent).toBe("register_event");
-    expect(result.state.stage).toBe("emotion");
+    expect(result.state.stage).toBe("behavior");
   });
 
   it("sem IA configurada mantém intenção e dados estruturados", async () => {

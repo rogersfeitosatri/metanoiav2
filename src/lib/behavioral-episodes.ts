@@ -228,6 +228,29 @@ export function patchEpisodeFromTurn(
     current_intent: state.intent,
     status,
     situation: state.situation || episode.situation || null,
+    context_tags: mergeList(episode.context_tags, state.context_tags),
+    physical_state: mergeList(episode.physical_state, state.physical_state),
+    hunger_level: state.hunger_level ?? episode.hunger_level ?? null,
+    satiety_level: state.satiety_level ?? episode.satiety_level ?? null,
+    urge: state.urge || episode.urge || null,
+    urge_intensity: state.urge_intensity ?? episode.urge_intensity ?? null,
+    automatic_thought: state.automatic_thought || episode.automatic_thought || null,
+    emotions: mergeList(episode.emotions, state.emotions),
+    emotion_intensity: state.emotion_intensity ?? episode.emotion_intensity ?? null,
+    behavior: state.behavior || episode.behavior || null,
+    immediate_consequence:
+      state.immediate_consequence || episode.immediate_consequence || null,
+    later_consequence: state.later_consequence || episode.later_consequence || null,
+    recovery_outcome: state.recovery_outcome || episode.recovery_outcome || null,
+    compensatory_behavior:
+      state.compensatory_behavior || episode.compensatory_behavior || null,
+    decision_point: state.decision_point || episode.decision_point || null,
+    main_influencing_factor:
+      state.main_influencing_factor || episode.main_influencing_factor || null,
+    captured_evidence: mergeEvidence(
+      episode.captured_evidence,
+      state.captured_evidence
+    ),
     current_stage: state.stage,
     awaiting_field: state.stage === "done" ? null : state.stage,
     conversation_state: state as unknown as Record<string, unknown>,
@@ -246,6 +269,35 @@ export function patchEpisodeFromTurn(
   if (relations.strategyTrialId) patch.related_strategy_trial_id = relations.strategyTrialId;
   if (relations.difficultyEventId) patch.related_difficulty_event_id = relations.difficultyEventId;
   return patch;
+}
+
+function mergeList(current: string[] | undefined, additions: string[]): string[] {
+  const result = [...(current || [])];
+  for (const addition of additions) {
+    if (!result.some((item) => normalize(item) === normalize(addition))) {
+      result.push(addition);
+    }
+  }
+  return result;
+}
+
+function mergeEvidence(
+  current: BehavioralEpisode["captured_evidence"] | undefined,
+  additions: ConversationEngineState["captured_evidence"]
+): BehavioralEpisode["captured_evidence"] {
+  const result = [...(current || [])];
+  for (const addition of additions) {
+    if (
+      !result.some(
+        (item) =>
+          item.field === addition.field &&
+          normalize(item.value) === normalize(addition.value)
+      )
+    ) {
+      result.push(addition);
+    }
+  }
+  return result.slice(-60);
 }
 
 function episodeTypeForState(state: ConversationEngineState): BehavioralEpisodeType {

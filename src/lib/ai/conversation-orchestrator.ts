@@ -19,6 +19,7 @@ import {
   type SafetyResult,
 } from "./schemas";
 import { analyzeSafetyLocal } from "./safety";
+import { mergeCapturedDataIntoState } from "./behavioral-capture";
 
 interface OrchestratorDependencies {
   provider?: AIProvider | null;
@@ -94,8 +95,12 @@ export async function orchestrateConversation(
       message
     );
     const usedLocalDecision = decision === local.decision;
+    const stateWithCapture = mergeCapturedDataIntoState(
+      local.state,
+      decision.captured_data
+    );
     const nextState = ConversationEngineStateSchema.parse({
-      ...local.state,
+      ...stateWithCapture,
       stage: decision.next_stage,
       last_question: decision.reply,
     });
@@ -159,6 +164,9 @@ CONTRATO DESTE TURNO
 - next_stage representa o único assunto que a próxima resposta deve preencher.
 - Não muda de estágio quando a pessoa não entendeu ou não soube responder.
 - captured_data contém somente informação explícita na mensagem atual.
+- Situação, contexto, corpo, pensamento, emoção, ação, consequências e retomada podem ser extraídos juntos quando estiverem explícitos.
+- Fome, tempo sem comer e obstáculos práticos vêm antes de interpretações emocionais.
+- Não pergunta de novo um campo que já esteja preenchido no estado.
 - Interpretações entram em memory_updates como source=ai e validation_status=proposed.
 - Não ordena gravação no banco e não afirma que alguém foi avisado.
 - O fallback determinístico abaixo já respeita segurança, intenção e fatores físicos. Só diverge dele quando o histórico realmente justificar.`;

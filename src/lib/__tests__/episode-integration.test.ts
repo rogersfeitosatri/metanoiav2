@@ -34,6 +34,20 @@ const RELATION_INDEX_MIGRATION = readFileSync(
   join(ROOT, "supabase/migrations", relationIndexMigrationName!),
   "utf8"
 );
+const behavioralRecordMigrationName = readdirSync(
+  join(ROOT, "supabase/migrations")
+).find((name) => name.endsWith("_complete_behavioral_episode_record.sql"));
+const BEHAVIORAL_RECORD_MIGRATION = readFileSync(
+  join(ROOT, "supabase/migrations", behavioralRecordMigrationName!),
+  "utf8"
+);
+const behavioralRecordIndexMigrationName = readdirSync(
+  join(ROOT, "supabase/migrations")
+).find((name) => name.endsWith("_index_behavioral_record_relations.sql"));
+const BEHAVIORAL_RECORD_INDEX_MIGRATION = readFileSync(
+  join(ROOT, "supabase/migrations", behavioralRecordIndexMigrationName!),
+  "utf8"
+);
 
 describe("integração dos episódios persistentes", () => {
   it("mensagens e ações recebem o episódio atual", () => {
@@ -54,6 +68,15 @@ describe("integração dos episódios persistentes", () => {
     expect(STORE).toContain("supabaseWritesRef.current");
     expect(STORE).toContain(".then(operation)");
     expect(STORE).toContain('sbInsert("behavioral_episodes"');
+  });
+
+  it("atualiza dificuldade e pensamento do mesmo episódio em modo local e Supabase", () => {
+    expect(STORE).toContain("existingEvent");
+    expect(STORE).toContain("item.episode_id === episodeId");
+    expect(STORE).toContain('sbUpdate("difficulty_events"');
+    expect(STORE).toContain('sbUpdate("thought_records"');
+    expect(HOME).toContain("event_occurred_at");
+    expect(HOME).toContain("event_time_precision");
   });
 
   it("dados locais antigos ganham coleções ausentes sem perder as existentes", () => {
@@ -121,5 +144,27 @@ describe("migration de episódios", () => {
     expect(RELATION_INDEX_MIGRATION).toContain("idx_episodes_related_meal_checkin");
     expect(RELATION_INDEX_MIGRATION).toContain("idx_episodes_related_strategy_trial");
     expect(RELATION_INDEX_MIGRATION).toContain("idx_episodes_related_difficulty_event");
+  });
+
+  it("conecta o registro comportamental ao episódio existente", () => {
+    for (const column of [
+      "context_tags",
+      "physical_state",
+      "automatic_thought",
+      "emotions",
+      "behavior",
+      "immediate_consequence",
+      "later_consequence",
+      "recovery_outcome",
+      "decision_point",
+      "captured_evidence",
+    ]) {
+      expect(BEHAVIORAL_RECORD_MIGRATION).toContain(column);
+    }
+    expect(BEHAVIORAL_RECORD_MIGRATION).toContain("event_time_description");
+    expect(BEHAVIORAL_RECORD_MIGRATION).toContain("event_time_precision");
+    expect(BEHAVIORAL_RECORD_INDEX_MIGRATION).toContain(
+      "idx_thought_records_difficulty_event"
+    );
   });
 });

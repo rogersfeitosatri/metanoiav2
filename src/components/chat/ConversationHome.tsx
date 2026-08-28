@@ -466,7 +466,12 @@ export function ConversationHome() {
           activeCheckinRef.current ||
             engineStateRef.current?.active_checkin_id ||
             undefined,
-          episodeId || undefined
+          episodeId || undefined,
+          {
+            occurredAt: episodeRef.current?.event_occurred_at,
+            description: episodeRef.current?.event_time_description,
+            precision: episodeRef.current?.event_time_precision,
+          }
         );
         relations.difficultyEventId = recorded.event.id;
       } else if (action.type === "save_memory") {

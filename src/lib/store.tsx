@@ -22,8 +22,8 @@ import type {
   UserMemory,
   MemoryKind,
   BehavioralEpisode,
+  EventTimePrecision,
 } from "./types";
-import type { ConversationState } from "./ai/conversation";
 import type { EpisodeCreateInput } from "./behavioral-episodes";
 import { buildDemoDatabase, uid, USER_ID, ADMIN_ID } from "./demo-data";
 import { computeConsistency } from "./consistency";
@@ -59,15 +59,13 @@ interface StoreValue {
     answers: Record<string, unknown>,
     conversationId?: string,
     checkinId?: string,
-    episodeId?: string
-  ) => { event: DifficultyEvent; thought: ThoughtRecord };
-  /** Salva uma situação vinda da conversa adaptativa (evento + registro de pensamento). */
-  recordSituation: (
-    userId: string,
-    state: ConversationState,
-    conversationId?: string,
-    episodeId?: string
-  ) => { event: DifficultyEvent; thought: ThoughtRecord };
+    episodeId?: string,
+    eventMoment?: {
+      occurredAt?: string | null;
+      description?: string | null;
+      precision?: EventTimePrecision | null;
+    }
+  ) => { event: DifficultyEvent; thought: ThoughtRecord | null };
   addAlternativeThought: (
     input: Partial<AlternativeThought> & { user_id: string; original_thought: string; alternative: string }
   ) => AlternativeThought;
@@ -529,54 +527,117 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   );
 
   const recordDifficulty: StoreValue["recordDifficulty"] = useCallback(
-    (userId, answers, conversationId, checkinId, episodeId) => {
+    (userId, answers, conversationId, checkinId, episodeId, eventMoment) => {
       const nowIso = new Date().toISOString();
+      const existingEvent = episodeId
+        ? db.difficulty_events.find((item) => item.episode_id === episodeId)
+        : undefined;
+      const incomingReasons = Array.isArray(answers.reasons)
+        ? answers.reasons.filter((item): item is string => typeof item === "string")
+        : [];
+      const reasons = mergeStringValues(existingEvent?.reasons, incomingReasons);
+      const contextTags = Array.isArray(answers.context)
+        ? answers.context.filter((item): item is string => typeof item === "string")
+        : [];
       const event: DifficultyEvent = {
-        id: genId("diff"),
+        id: existingEvent?.id || genId("diff"),
         user_id: userId,
         episode_id: episodeId || null,
-        checkin_id: checkinId || null,
-        conversation_id: conversationId || null,
-        occurred_at: nowIso,
-        primary_reason: (answers.reasons as string[])?.[0] || null,
-        reasons: (answers.reasons as string[]) || [],
-        context: (answers.situation as string) || null,
-        hunger_intensity: (answers.hunger_intensity as number) ?? null,
-        urge_intensity: (answers.urge_intensity as number) ?? null,
-        emotional_intensity: (answers.emotional_intensity as number) ?? null,
-        created_at: nowIso,
+        checkin_id: checkinId || existingEvent?.checkin_id || null,
+        conversation_id: conversationId || existingEvent?.conversation_id || null,
+        occurred_at: eventMoment?.occurredAt || existingEvent?.occurred_at || nowIso,
+        event_time_description:
+          eventMoment?.description || existingEvent?.event_time_description || null,
+        event_time_precision:
+          eventMoment?.precision || existingEvent?.event_time_precision || null,
+        primary_reason: reasons[0] || existingEvent?.primary_reason || null,
+        reasons,
+        context:
+          mergeOptionalText(
+            existingEvent?.context,
+            [answers.situation, contextTags.join(", ")].filter(Boolean).join(" | ")
+          ) || null,
+        hunger_intensity:
+          (answers.hunger_intensity as number) ?? existingEvent?.hunger_intensity ?? null,
+        urge_intensity:
+          (answers.urge_intensity as number) ?? existingEvent?.urge_intensity ?? null,
+        emotional_intensity:
+          (answers.emotional_intensity as number) ??
+          existingEvent?.emotional_intensity ??
+          null,
+        created_at: existingEvent?.created_at || nowIso,
       };
-      const thought: ThoughtRecord = {
-        id: genId("thr"),
-        user_id: userId,
-        difficulty_event_id: event.id,
-        situation: (answers.situation as string) || undefined,
-        automatic_thought: (answers.automatic_thought as string) || undefined,
-        emotions: answers.emotion ? [answers.emotion as string] : [],
-        behavior: (answers.behavior as string) || undefined,
-        consequences: (answers.consequences as string) || undefined,
-        decision_point: (answers.decision_point as string) || undefined,
-        alternative_thought: (answers.alternative_thought as string) || undefined,
-        // --- v2: habilidades observadas nesta situação (alimentam a Evolução) ---
-        // Derivamos o que dá para derivar; o resto vem explícito de quem chamou.
-        hunger_level: (answers.hunger_intensity as number) ?? null,
-        noticed_hunger_early:
-          typeof answers.hunger_intensity === "number"
-            ? (answers.hunger_intensity as number) <= 6
-            : undefined,
-        thought_self_identified: answers.thought_self_identified as boolean | undefined,
-        emotion_self_identified: answers.emotion
-          ? ((answers.emotion_self_identified as boolean) ?? true)
-          : undefined,
-        all_or_nothing:
-          (answers.all_or_nothing as boolean | undefined) ??
-          detectAllOrNothing(
-            `${(answers.automatic_thought as string) || ""} ${(answers.situation as string) || ""}`
-          ),
-        guilt_level: (answers.guilt_level as number) ?? null,
-        recovery_outcome: answers.recovery_outcome as ThoughtRecord["recovery_outcome"],
-        created_at: nowIso,
-      };
+      const existingThought = db.thought_records.find(
+        (item) => item.difficulty_event_id === event.id
+      );
+      const incomingEmotions = Array.isArray(answers.emotions)
+        ? answers.emotions.filter((item): item is string => typeof item === "string")
+        : answers.emotion
+          ? [answers.emotion as string]
+          : [];
+      const hasThoughtRecordCore = Boolean(
+        answers.situation &&
+          answers.automatic_thought &&
+          incomingEmotions.length &&
+          answers.behavior
+      );
+      const consequence = [
+        answers.consequences,
+        answers.immediate_consequence,
+        answers.later_consequence,
+      ].filter((item): item is string => typeof item === "string" && Boolean(item)).join(" | ");
+      const thought: ThoughtRecord | null = existingThought || hasThoughtRecordCore
+        ? {
+            id: existingThought?.id || genId("thr"),
+            user_id: userId,
+            difficulty_event_id: event.id,
+            situation:
+              mergeOptionalText(existingThought?.situation, answers.situation as string) || undefined,
+            automatic_thought:
+              mergeOptionalText(
+                existingThought?.automatic_thought,
+                answers.automatic_thought as string
+              ) || undefined,
+            emotions: mergeStringValues(existingThought?.emotions, incomingEmotions),
+            behavior:
+              mergeOptionalText(existingThought?.behavior, answers.behavior as string) || undefined,
+            consequences:
+              mergeOptionalText(existingThought?.consequences, consequence) || undefined,
+            decision_point:
+              mergeOptionalText(
+                existingThought?.decision_point,
+                answers.decision_point as string
+              ) || undefined,
+            alternative_thought:
+              existingThought?.alternative_thought ||
+              (answers.alternative_thought as string) ||
+              undefined,
+            hunger_level:
+              (answers.hunger_intensity as number) ?? existingThought?.hunger_level ?? null,
+            noticed_hunger_early:
+              typeof answers.hunger_intensity === "number"
+                ? (answers.hunger_intensity as number) <= 6
+                : existingThought?.noticed_hunger_early,
+            thought_self_identified:
+              (answers.thought_self_identified as boolean | undefined) ??
+              existingThought?.thought_self_identified,
+            emotion_self_identified:
+              (answers.emotion_self_identified as boolean | undefined) ??
+              existingThought?.emotion_self_identified,
+            all_or_nothing:
+              (answers.all_or_nothing as boolean | undefined) ??
+              existingThought?.all_or_nothing ??
+              detectAllOrNothing(
+                `${(answers.automatic_thought as string) || ""} ${(answers.situation as string) || ""}`
+              ),
+            guilt_level:
+              (answers.guilt_level as number) ?? existingThought?.guilt_level ?? null,
+            recovery_outcome:
+              (answers.recovery_outcome as ThoughtRecord["recovery_outcome"]) ||
+              existingThought?.recovery_outcome,
+            created_at: existingThought?.created_at || nowIso,
+          }
+        : null;
       let trial: StrategyTrial | null = null;
       if (answers.commitment && answers.strategy_choice) {
         trial = {
@@ -595,70 +656,32 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         };
       }
       mutate((d) => {
-        d.difficulty_events.unshift(event);
-        d.thought_records.unshift(thought);
+        const eventIndex = d.difficulty_events.findIndex((item) => item.id === event.id);
+        if (eventIndex >= 0) d.difficulty_events[eventIndex] = event;
+        else d.difficulty_events.unshift(event);
+        if (thought) {
+          const thoughtIndex = d.thought_records.findIndex((item) => item.id === thought.id);
+          if (thoughtIndex >= 0) d.thought_records[thoughtIndex] = thought;
+          else d.thought_records.unshift(thought);
+        }
         if (trial) d.strategy_trials.unshift(trial);
       });
-      sbInsert("difficulty_events", event as unknown as Record<string, unknown>);
-      sbInsert("thought_records", thought as unknown as Record<string, unknown>);
+      if (existingEvent) {
+        sbUpdate("difficulty_events", event.id, event as unknown as Record<string, unknown>);
+      } else {
+        sbInsert("difficulty_events", event as unknown as Record<string, unknown>);
+      }
+      if (thought) {
+        if (existingThought) {
+          sbUpdate("thought_records", thought.id, thought as unknown as Record<string, unknown>);
+        } else {
+          sbInsert("thought_records", thought as unknown as Record<string, unknown>);
+        }
+      }
       if (trial) sbInsert("strategy_trials", trial as unknown as Record<string, unknown>);
       return { event, thought };
     },
-    [mutate, sbInsert]
-  );
-
-  const recordSituation: StoreValue["recordSituation"] = useCallback(
-    (userId, s, conversationId, episodeId) => {
-      const nowIso = new Date().toISOString();
-      const reasons: string[] = [];
-      if ((s.hunger_level ?? 0) >= 7) reasons.push("Estava com muita fome.");
-      if (s.emotion) reasons.push(s.emotion);
-      if (s.all_or_nothing) reasons.push("Pensei que já tinha estragado o dia.");
-
-      const event: DifficultyEvent = {
-        id: genId("diff"),
-        user_id: userId,
-        episode_id: episodeId || null,
-        checkin_id: null,
-        conversation_id: conversationId || null,
-        occurred_at: nowIso,
-        primary_reason: reasons[0] || null,
-        reasons,
-        context: s.situation || null,
-        hunger_intensity: s.hunger_level ?? null,
-        urge_intensity: null,
-        emotional_intensity: s.guilt_level ?? null,
-        created_at: nowIso,
-      };
-      const thought: ThoughtRecord = {
-        id: genId("thr"),
-        user_id: userId,
-        difficulty_event_id: event.id,
-        situation: s.situation,
-        automatic_thought: s.automatic_thought,
-        emotions: s.emotion ? [s.emotion] : [],
-        behavior: s.behavior,
-        consequences: s.consequence,
-        decision_point: undefined,
-        alternative_thought: s.alternative,
-        thought_self_identified: s.thought_self_identified,
-        emotion_self_identified: s.emotion_self_identified,
-        hunger_level: s.hunger_level ?? null,
-        noticed_hunger_early: s.noticed_hunger_early,
-        all_or_nothing: s.all_or_nothing,
-        guilt_level: s.guilt_level ?? null,
-        recovery_outcome: s.recovery_outcome,
-        created_at: nowIso,
-      };
-      mutate((d) => {
-        d.difficulty_events.unshift(event);
-        d.thought_records.unshift(thought);
-      });
-      sbInsert("difficulty_events", event as unknown as Record<string, unknown>);
-      sbInsert("thought_records", thought as unknown as Record<string, unknown>);
-      return { event, thought };
-    },
-    [mutate, sbInsert]
+    [db.difficulty_events, db.thought_records, mutate, sbInsert, sbUpdate]
   );
 
   const addAlternativeThought: StoreValue["addAlternativeThought"] = useCallback(
@@ -779,6 +802,23 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         event_occurred_at: input.event_occurred_at ?? null,
         event_time_description: input.event_time_description ?? null,
         event_time_precision: input.event_time_precision ?? null,
+        context_tags: [],
+        physical_state: [],
+        hunger_level: null,
+        satiety_level: null,
+        urge: null,
+        urge_intensity: null,
+        automatic_thought: null,
+        emotions: [],
+        emotion_intensity: null,
+        behavior: null,
+        immediate_consequence: null,
+        later_consequence: null,
+        recovery_outcome: null,
+        compensatory_behavior: null,
+        decision_point: null,
+        main_influencing_factor: null,
+        captured_evidence: [],
         current_stage: null,
         awaiting_field: null,
         conversation_state: {},
@@ -1120,7 +1160,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     completeOnboarding,
     addCheckin,
     recordDifficulty,
-    recordSituation,
     addAlternativeThought,
     updateAlternativeThought,
     saveCopingCard,
@@ -1155,6 +1194,42 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 function detectAllOrNothing(text: string): boolean | undefined {
   if (!text.trim()) return undefined;
   return /estraguei tudo|j[áa] que|tanto faz|perdi o dia|amanh[ãa] come[çc]o|acabou mesmo/i.test(text);
+}
+
+function mergeStringValues(
+  current: string[] | undefined,
+  additions: string[]
+): string[] {
+  const result = [...(current || [])];
+  for (const addition of additions) {
+    const normalized = normalizeStoredText(addition);
+    if (!result.some((item) => normalizeStoredText(item) === normalized)) {
+      result.push(addition);
+    }
+  }
+  return result;
+}
+
+function mergeOptionalText(
+  current: string | null | undefined,
+  addition: string | null | undefined
+): string {
+  const next = addition?.trim();
+  if (!next) return current || "";
+  if (!current) return next;
+  const normalizedCurrent = normalizeStoredText(current);
+  const normalizedNext = normalizeStoredText(next);
+  if (normalizedCurrent.includes(normalizedNext)) return current;
+  if (normalizedNext.includes(normalizedCurrent)) return next;
+  return `${current} | ${next}`.slice(0, 2000);
+}
+
+function normalizeStoredText(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase("pt-BR")
+    .trim();
 }
 
 function emptyDatabase(): Database {

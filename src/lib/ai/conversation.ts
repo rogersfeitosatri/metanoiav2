@@ -1,5 +1,12 @@
 import type { ConversationIntent } from "../conversation-intent";
 import {
+  assessBehavioralSufficiency,
+  extractBehavioralData,
+  groundedModelCapture,
+  hasBehavioralDifficulty,
+  mergeCapturedDataIntoState,
+} from "./behavioral-capture";
+import {
   ConversationDecisionSchema,
   ConversationEngineStateSchema,
   type ConversationAction,
@@ -53,7 +60,7 @@ const RE = {
   foodEvent:
     /comi|comer|comendo|refei[cç][aã]o|almo[cç]o|jantar|lanche|doce|chocolate|comida/i,
   emotional:
-    /ansios|estress|nervos|briga|triste|chate|raiva|irrit|frustr|sozinh|entedia|t[eé]dio|cansad|ang[uú]stia/i,
+    /ansios|estress|nervos|brig|discuss|triste|chate|raiva|irrit|frustr|sozinh|entedia|t[eé]dio|ang[uú]stia/i,
   urge: /impulso|sem pensar|autom[aá]tic|nem percebi|do nada|vontade|desejo|fissura/i,
   guilt: /culpa|arrepend|me odeio|fracass|vergonha|nojo/i,
   allOrNothing:
@@ -218,17 +225,28 @@ export function runDeterministicTurn(
   }
 
   const currentStage = state.stage;
-  const next: ConversationEngineState = {
+  const extracted = extractBehavioralData(message);
+  let next: ConversationEngineState = mergeCapturedDataIntoState({
     ...state,
     asked: [...new Set([...state.asked, currentStage])],
-  };
+  }, extracted);
   const actions: ConversationAction[] = [];
   const signals = detectSignals(`${message} ${state.situation || ""}`);
   let decision: ConversationDecision;
 
   switch (currentStage) {
     case "situation": {
-      next.situation = message;
+      next.situation = mergeText(next.situation, message);
+      if (!next.captured_evidence.some((item) => item.field === "situation")) {
+        next.captured_evidence.push({
+          field: "situation",
+          value: message,
+          evidence: message,
+          source: "user",
+          status: "reported",
+          confidence: 1,
+        });
+      }
       const hunger = extractHunger(message);
       if (hunger != null) {
         next.hunger_level = hunger;
@@ -242,7 +260,14 @@ export function runDeterministicTurn(
       }
       if (signals.guilt) next.guilt_level = 7;
 
-      if (next.hunger_level != null && next.hunger_level >= 7) {
+      const sufficiency = assessBehavioralSufficiency(next);
+      if (sufficiency.practical && next.behavior) {
+        decision = decisionOf(
+          "Então teve um obstáculo bem prático aí. Isso costuma acontecer ou hoje foi exceção?",
+          "context",
+          ["Costuma acontecer", "Hoje foi exceção", "Acontece às vezes"]
+        );
+      } else if (next.hunger_level != null && next.hunger_level >= 7) {
         decision = highHungerDecision(next);
       } else if (
         next.hunger_level == null &&
@@ -256,18 +281,42 @@ export function runDeterministicTurn(
       } else if (next.all_or_nothing) {
         decision = allOrNothingDecision(next);
       } else if (signals.emotional) {
-        decision = decisionOf(
-          "O que tava mais forte em ti nesse momento?",
-          "emotion",
-          ["Ansiedade", "Raiva", "Tristeza", "Frustração", "Cansaço", "Não sei"]
-        );
+        decision = next.automatic_thought
+          ? next.behavior
+            ? recoveryDecision()
+            : behaviorDecision()
+          : decisionOf(
+              "Depois disso, qual frase passou pela tua cabeça?",
+              "thought",
+              ["Não lembro", "Não sei dizer"]
+            );
+      } else if (next.behavior) {
+        decision = recoveryDecision();
       } else {
         decision = decisionOf(
-          "Antes disso, como estava tua fome de 0 a 10?",
-          "hunger",
-          ["Até 3", "Entre 4 e 6", "7 ou mais"]
+          "O que tu acabou fazendo nessa situação?",
+          "behavior"
         );
       }
+      break;
+    }
+
+    case "context": {
+      if (/costuma|frequente|sempre|muitas vezes/i.test(message)) {
+        next.context_recurrence = "recurring";
+      } else if (/exce[cç][aã]o|s[oó] hoje|foi diferente/i.test(message)) {
+        next.context_recurrence = "exception";
+      } else {
+        next.context_recurrence = "unknown";
+      }
+      decision = decisionOf(
+        next.context_recurrence === "recurring"
+          ? "Tá. Então não parece falta de vontade: tua rotina vem empurrando essa refeição para depois. Acho que já dá para entender melhor o que aconteceu aqui."
+          : "Entendi. Hoje a reunião bateu de frente com a refeição. Acho que já dá para entender melhor o que aconteceu aqui.",
+        "done",
+        [],
+        { kind: "reflection", suggestClose: true }
+      );
       break;
     }
 
@@ -322,35 +371,58 @@ export function runDeterministicTurn(
     }
 
     case "thought": {
-      next.automatic_thought = message;
-      next.thought_self_identified = !THOUGHT_EXAMPLES.includes(message);
+      if (/nenhuma dessas|nenhuma delas|n[aã]o era nada disso/i.test(message)) {
+        next.thought_self_identified = false;
+        decision = !next.behavior
+          ? behaviorDecision()
+          : !next.emotions.length
+            ? decisionOf(
+                "Tá. Não precisa forçar uma frase. O que tu tava sentindo nessa hora?",
+                "emotion",
+                ["Ansiedade", "Raiva", "Tristeza", "Frustração", "Culpa", "Não sei"]
+              )
+            : recoveryDecision();
+        break;
+      }
+      next.automatic_thought = next.automatic_thought || message;
+      next.thought_self_identified =
+        next.thought_self_identified ?? !THOUGHT_EXAMPLES.includes(message);
       next.all_or_nothing = signals.allOrNothing;
       if (signals.allOrNothing) {
         decision = allOrNothingDecision(next);
-      } else {
+      } else if (!next.behavior) {
+        decision = behaviorDecision();
+      } else if (!next.emotions.length) {
         decision = decisionOf(
           "E o que tu tava sentindo nessa hora?",
           "emotion",
           ["Ansiedade", "Raiva", "Tristeza", "Frustração", "Culpa", "Não sei"]
         );
+      } else {
+        decision = recoveryDecision();
       }
       break;
     }
 
     case "emotion": {
-      next.emotion = message;
-      next.emotion_self_identified = true;
+      if (/nenhuma dessas|nenhuma delas|n[aã]o era nada disso/i.test(message)) {
+        next.emotion_self_identified = false;
+        decision = next.behavior ? recoveryDecision() : behaviorDecision();
+        break;
+      }
+      if (!next.emotions.length && !next.physical_state.length) {
+        next.emotion = message;
+        next.emotions = [message];
+        next.emotion_self_identified = true;
+      }
       if (signals.guilt) next.guilt_level = 7;
-      decision = decisionOf(
-        "Entendi. E depois disso, como foi o resto do dia?",
-        "recovery",
-        [
-          "Segui normalmente depois",
-          "Demorei, mas retomei",
-          "Acabei largando o resto do dia",
-          "Tentei compensar depois",
-        ]
-      );
+      decision = next.behavior ? recoveryDecision() : behaviorDecision();
+      break;
+    }
+
+    case "behavior": {
+      next.behavior = next.behavior || message;
+      decision = recoveryDecision();
       break;
     }
 
@@ -364,13 +436,39 @@ export function runDeterministicTurn(
       break;
     }
 
+    case "immediate_consequence": {
+      next.immediate_consequence = mergeText(next.immediate_consequence, message);
+      decision = decisionOf(
+        "E um pouco depois, o que aconteceu?",
+        "later_consequence"
+      );
+      break;
+    }
+
+    case "later_consequence": {
+      next.later_consequence = mergeText(next.later_consequence, message);
+      next.consequence = mergeText(next.consequence, message);
+      decision = recoveryDecision();
+      break;
+    }
+
     case "recovery": {
       next.recovery_outcome = mapRecovery(message);
-      decision = decisionOf(
-        "Olhando agora, tem uma coisa pequena que seria possível fazer diferente numa próxima vez?",
-        "strategy",
-        buildStrategySuggestions(next)
-      );
+      if (next.recovery_outcome === "compensou" && !next.compensatory_behavior) {
+        next.compensatory_behavior = message;
+      }
+      decision = next.all_or_nothing && !next.decision_point
+        ? decisionOf(
+            "Em que momento talvez ainda desse para fazer alguma coisa diferente, sem tentar compensar?",
+            "decision_point"
+          )
+        : strategyDecision(next);
+      break;
+    }
+
+    case "decision_point": {
+      next.decision_point = mergeText(next.decision_point, message);
+      decision = strategyDecision(next);
       break;
     }
 
@@ -401,7 +499,6 @@ export function runDeterministicTurn(
         next.strategy_recorded = true;
         actions.push({ type: "create_strategy_trial", title: message });
       }
-      addDifficultyAction(next, actions);
       decision = decisionOf(
         next.strategy
           ? `Fechou. A ideia fica como um teste: “${shorten(next.strategy)}”. Depois a gente olha se ajudou de verdade.`
@@ -587,6 +684,7 @@ export function runDeterministicTurn(
 
   }
 
+  addDifficultyAction(next, actions);
   const captured = toCapturedData(next);
   decision = ConversationDecisionSchema.parse({
     ...decision,
@@ -602,6 +700,11 @@ export function validateModelDecision(
   message: string
 ): ConversationDecision {
   const parsed = ConversationDecisionSchema.parse(candidate);
+  const groundedCapture = groundedModelCapture(
+    parsed.captured_data,
+    message,
+    extractBehavioralData(message)
+  );
   if (fallback.needs_clarification) return fallback;
   if (countQuestions(parsed.reply) > 1) return fallback;
   if (containsBannedCliche(parsed.reply)) return fallback;
@@ -638,7 +741,7 @@ export function validateModelDecision(
   return ConversationDecisionSchema.parse({
     ...parsed,
     captured_data: {
-      ...(parsed.captured_data || {}),
+      ...groundedCapture,
       ...(fallback.captured_data || {}),
     },
     memory_updates: memoryUpdates,
@@ -716,6 +819,10 @@ function alternatePath(
       reply: "Tá. Vamos por um exemplo concreto: qual foi a última situação com comida que te incomodou?",
       quickReplies: ["Hoje", "Ontem", "No fim de semana", "Prefiro falar de agora"],
     },
+    context: {
+      reply: "Quero só diferenciar uma coisa prática: isso costuma acontecer ou hoje foi exceção?",
+      quickReplies: ["Costuma acontecer", "Hoje foi exceção", "Acontece às vezes"],
+    },
     hunger: {
       reply: "Pensa nos sinais do corpo: vazio no estômago, fraqueza ou irritação. Tava mais perto de fome baixa, média ou alta?",
       quickReplies: ["Baixa", "Média", "Alta"],
@@ -729,16 +836,31 @@ function alternatePath(
       quickReplies: [...THOUGHT_EXAMPLES.slice(0, 5), "Nenhuma dessas"],
     },
     emotion: {
-      reply: "Vamos pelo corpo: tava mais acelerado, pesado, irritado ou meio desligado?",
-      quickReplies: ["Acelerado", "Pesado", "Irritado", "Desligado"],
+      reply: "Não precisa achar a palavra perfeita. Era mais ansiedade, raiva, frustração, tédio, tristeza ou nenhuma dessas?",
+      quickReplies: ["Ansiedade", "Raiva", "Frustração", "Tédio", "Tristeza", "Nenhuma dessas"],
+    },
+    behavior: {
+      reply: "Quis dizer o que aconteceu na prática depois disso. Tu comeu, continuou, parou ou fez outra coisa?",
+      quickReplies: ["Comi", "Continuei comendo", "Consegui parar", "Foi outra coisa"],
     },
     consequence: {
       reply: "Na prática, o que mudou depois: a próxima refeição, teu humor ou o resto do dia?",
       quickReplies: ["A próxima refeição", "Meu humor", "O resto do dia"],
     },
+    immediate_consequence: {
+      reply: "Logo na hora, isso trouxe alívio, prazer, distração ou outra coisa?",
+      quickReplies: ["Alívio", "Prazer", "Distração", "Foi outra coisa"],
+    },
+    later_consequence: {
+      reply: "Um pouco depois, veio culpa, frustração, continuação do episódio ou nada relevante?",
+      quickReplies: ["Culpa", "Frustração", "Continuei", "Nada relevante"],
+    },
     recovery: {
       reply: "Depois disso, tu conseguiu seguir normalmente ou aquilo continuou pesando?",
       quickReplies: ["Segui normalmente", "Pesou por um tempo", "Larguei o resto do dia", "Compensei"],
+    },
+    decision_point: {
+      reply: "Pensa na sequência toda. Teve algum momento em que ainda parecia possível escolher outra coisa?",
     },
     alternative: {
       reply: "Se fosse com alguém que tu gosta, essa refeição provaria que a pessoa estragou o dia inteiro?",
@@ -819,9 +941,45 @@ function highHungerDecision(state: ConversationEngineState): ConversationDecisio
 
 function allOrNothingDecision(state: ConversationEngineState): ConversationDecision {
   const thought = state.automatic_thought || "já estraguei tudo";
+  if (!state.behavior) {
+    return decisionOf(
+      `Tá. O pensamento foi “${shorten(thought)}”. E depois que ele apareceu, o que tu acabou fazendo?`,
+      "behavior"
+    );
+  }
   return decisionOf(
-    `Quando tu fala “${shorten(thought)}”, o que exatamente foi estragado?`,
-    "consequence"
+    `O pensamento foi “${shorten(thought)}” e depois veio o que tu fez. Como ficou o restante do dia?`,
+    "recovery",
+    recoveryReplies()
+  );
+}
+
+function behaviorDecision(): ConversationDecision {
+  return decisionOf("E depois disso, o que tu acabou fazendo?", "behavior");
+}
+
+function recoveryDecision(): ConversationDecision {
+  return decisionOf(
+    "Depois disso tu conseguiu seguir normalmente ou aquilo acabou puxando o resto do dia?",
+    "recovery",
+    recoveryReplies()
+  );
+}
+
+function recoveryReplies(): string[] {
+  return [
+    "Segui normalmente depois",
+    "Demorei, mas retomei",
+    "Acabei largando o resto do dia",
+    "Tentei compensar depois",
+  ];
+}
+
+function strategyDecision(state: ConversationEngineState): ConversationDecision {
+  return decisionOf(
+    "Olhando agora, tem uma coisa pequena que seria possível fazer diferente numa próxima vez?",
+    "strategy",
+    buildStrategySuggestions(state)
   );
 }
 
@@ -829,19 +987,9 @@ function addDifficultyAction(
   state: ConversationEngineState,
   actions: ConversationAction[]
 ) {
-  if (
-    state.difficulty_recorded ||
-    !state.situation ||
-    !(
-      state.hunger_level != null ||
-      state.automatic_thought ||
-      state.emotion ||
-      state.recovery_outcome
-    )
-  ) {
-    return;
-  }
+  if (!hasBehavioralDifficulty(state) || !assessBehavioralSufficiency(state).sufficient) return;
   const data = toCapturedData(state);
+  if (actions.some((action) => action.type === "record_difficulty")) return;
   actions.push({ type: "record_difficulty", data });
   state.difficulty_recorded = true;
 }
@@ -851,21 +999,35 @@ function toCapturedData(state: ConversationEngineState): ConversationCapturedDat
     (state.hunger_level ?? 0) >= 7 ? "Fome alta" : "",
     state.emotion || "",
     state.all_or_nothing ? "Pensamento tudo-ou-nada" : "",
+    state.main_influencing_factor === "practical" ? "Obstáculo prático" : "",
+    state.main_influencing_factor === "physical" ? "Fator físico" : "",
   ].filter(Boolean);
   return {
     reasons: reasons.length ? reasons : undefined,
     situation: state.situation,
+    context: state.context_tags.length ? state.context_tags : undefined,
     physical_context: state.physical_context,
+    physical_state: state.physical_state.length ? state.physical_state : undefined,
     automatic_thought: state.automatic_thought,
     emotion: state.emotion,
+    emotions: state.emotions.length ? state.emotions : undefined,
     behavior: state.behavior,
     consequences: state.consequence,
+    immediate_consequence: state.immediate_consequence,
+    later_consequence: state.later_consequence,
+    decision_point: state.decision_point,
+    compensatory_behavior: state.compensatory_behavior,
+    urge: state.urge,
     hunger_intensity: state.hunger_level ?? undefined,
-    emotional_intensity: state.guilt_level ?? undefined,
+    satiety_intensity: state.satiety_level ?? undefined,
+    urge_intensity: state.urge_intensity ?? undefined,
+    emotional_intensity: state.emotion_intensity ?? state.guilt_level ?? undefined,
     recovery_outcome: state.recovery_outcome,
+    main_influencing_factor: state.main_influencing_factor,
     all_or_nothing: state.all_or_nothing,
     thought_self_identified: state.thought_self_identified,
     emotion_self_identified: state.emotion_self_identified,
+    evidence: state.captured_evidence.length ? state.captured_evidence.slice(-20) : undefined,
   };
 }
 
@@ -961,12 +1123,17 @@ function asksKnownField(
 ): boolean {
   const known: Partial<Record<ConversationStage, unknown>> = {
     situation: state.situation,
+    context: state.context_recurrence,
     hunger: state.hunger_level,
     physical_context: state.physical_context,
     thought: state.automatic_thought,
-    emotion: state.emotion,
+    emotion: state.emotions.length ? state.emotions : state.emotion,
+    behavior: state.behavior,
     consequence: state.consequence,
+    immediate_consequence: state.immediate_consequence,
+    later_consequence: state.later_consequence,
     recovery: state.recovery_outcome,
+    decision_point: state.decision_point,
     alternative: state.alternative,
     strategy: state.strategy,
     prepare_situation: state.situation,
@@ -1000,8 +1167,12 @@ function isStageCompatible(
     "physical_context",
     "thought",
     "emotion",
+    "behavior",
     "consequence",
+    "immediate_consequence",
+    "later_consequence",
     "recovery",
+    "decision_point",
     "alternative",
     "strategy",
     "done",
