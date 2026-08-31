@@ -444,7 +444,11 @@ export function ConversationHome() {
   function applyActions(actions: ConversationAction[]): EpisodeRelations {
     const relations: EpisodeRelations = {};
     const episodeId = episodeRef.current?.id || null;
-    for (const action of actions) {
+    let thoughtRecordId: string | null = null;
+    const orderedActions = [...actions].sort((a, b) =>
+      a.type === "record_difficulty" ? -1 : b.type === "record_difficulty" ? 1 : 0
+    );
+    for (const action of orderedActions) {
       if (action.type === "create_meal_checkin") {
         const checkin = store.addCheckin({
           user_id: userId,
@@ -474,6 +478,25 @@ export function ConversationHome() {
           }
         );
         relations.difficultyEventId = recorded.event.id;
+        thoughtRecordId = recorded.thought?.id || null;
+      } else if (action.type === "upsert_alternative_thought") {
+        const linkedThoughtId =
+          thoughtRecordId ||
+          store.db.thought_records.find((thought) => {
+            const difficulty = store.db.difficulty_events.find(
+              (event) => event.id === thought.difficulty_event_id
+            );
+            return difficulty?.episode_id === episodeId;
+          })?.id;
+        if (linkedThoughtId) {
+          store.addAlternativeThought({
+            user_id: userId,
+            thought_record_id: linkedThoughtId,
+            original_thought: action.original_thought,
+            alternative: action.alternative,
+            belief_level: action.belief_level,
+          });
+        }
       } else if (action.type === "save_memory") {
         store.saveMemory({
           ...action.memory,

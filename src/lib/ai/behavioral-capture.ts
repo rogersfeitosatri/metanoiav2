@@ -317,7 +317,7 @@ function collectLabels(text: string, definitions: Array<[string, RegExp]>): stri
 
 function extractAutomaticThought(text: string): string | null {
   const known = text.match(
-    /\b(j[aá] estraguei tudo|eu mere[cç]o(?: alguma coisa boa)?|s[oó] hoje|depois (?:eu )?compenso|j[aá] que (?:comecei|foi),? tanto faz|n[aã]o consigo me controlar)\b/i
+    /\b(j[aá] (?:estraguei|(?:tinha )?estragad[oa]) tudo|eu mere[cç]o(?: comer isso| alguma coisa boa)?|s[oó] hoje|(?:depois|amanh[ãa]) (?:eu )?compenso|j[aá] que (?:comecei|foi),? tanto faz|agora tanto faz|n[aã]o consigo me controlar|nunca consigo (?:manter|me controlar)|(?:o )?dia (?:j[aá] )?foi perdido)\b/i
   );
   if (known) return known[1];
   const stated = text.match(
@@ -461,7 +461,7 @@ function mergeText(current: string | undefined, addition: string): string {
 }
 
 function isAllOrNothing(text: string): boolean {
-  return /estraguei tudo|j[aá] que|tanto faz|perdi o dia|amanh[ãa] come[cç]o/i.test(text);
+  return /estraguei tudo|estragado tudo|j[aá] que|tanto faz|perdi o dia|dia (?:j[aá] )?foi perdido|amanh[ãa] come[cç]o/i.test(text);
 }
 
 function normalize(text: string): string {

@@ -167,6 +167,10 @@ CONTRATO DESTE TURNO
 - Situação, contexto, corpo, pensamento, emoção, ação, consequências e retomada podem ser extraídos juntos quando estiverem explícitos.
 - Fome, tempo sem comer e obstáculos práticos vêm antes de interpretações emocionais.
 - Não pergunta de novo um campo que já esteja preenchido no estado.
+- Quando houver trabalho cognitivo, examina o efeito e os fatos antes de construir uma alternativa.
+- Não corrige o pensamento com frase motivacional; ajuda a pessoa a formular uma leitura realista.
+- Uma alternativa só conclui quando belief_level foi informado e é maior que 3.
+- cognitive_stage e os estágios cognitivos do fallback são obrigatórios; a IA pode humanizar a linguagem sem saltar etapas.
 - Interpretações entram em memory_updates como source=ai e validation_status=proposed.
 - Não ordena gravação no banco e não afirma que alguém foi avisado.
 - O fallback determinístico abaixo já respeita segurança, intenção e fatores físicos. Só diverge dele quando o histórico realmente justificar.`;

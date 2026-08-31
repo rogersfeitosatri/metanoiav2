@@ -64,7 +64,9 @@ const RE = {
   urge: /impulso|sem pensar|autom[aá]tic|nem percebi|do nada|vontade|desejo|fissura/i,
   guilt: /culpa|arrepend|me odeio|fracass|vergonha|nojo/i,
   allOrNothing:
-    /estraguei tudo|j[aá] que|tanto faz|perdi o dia|acabou mesmo|amanh[ãa] come[cç]o|larguei o dia/i,
+    /estraguei tudo|estragado tudo|j[aá] que|tanto faz|perdi o dia|dia (?:j[aá] )?foi perdido|acabou mesmo|amanh[ãa] come[cç]o|larguei o dia/i,
+  cognitiveThought:
+    /estraguei tudo|estragado tudo|j[aá] que|tanto faz|perdi o dia|dia (?:j[aá] )?foi perdido|n[ãa]o consigo me controlar|nunca consigo (?:manter|me controlar)|eu mere[cç]o|amanh[ãa] (?:eu )?compenso|depois (?:eu )?compenso/i,
   decline: /n[ãa]o quero|prefiro n[ãa]o|deixa pra l[aá]|s[oó] registrar/i,
 };
 
@@ -278,8 +280,8 @@ export function runDeterministicTurn(
           "hunger",
           ["Até 3", "Entre 4 e 6", "7 ou mais"]
         );
-      } else if (next.all_or_nothing) {
-        decision = allOrNothingDecision(next);
+      } else if (isCognitivelyRelevant(next)) {
+        decision = cognitiveEntryDecision(next);
       } else if (signals.emotional) {
         decision = next.automatic_thought
           ? next.behavior
@@ -338,8 +340,8 @@ export function runDeterministicTurn(
       next.noticed_hunger_early = hunger <= 6;
       if (hunger >= 7) {
         decision = highHungerDecision(next);
-      } else if (next.all_or_nothing || signals.allOrNothing) {
-        decision = allOrNothingDecision(next);
+      } else if (isCognitivelyRelevant(next) || signals.allOrNothing) {
+        decision = cognitiveEntryDecision(next);
       } else if (detectSignals(next.situation || "").emotional) {
         decision = decisionOf(
           `Tá. A fome tava ${hunger}/10. O que tava mais forte em ti nessa hora?`,
@@ -358,8 +360,8 @@ export function runDeterministicTurn(
 
     case "physical_context": {
       next.physical_context = mergeText(next.physical_context, message);
-      if (next.all_or_nothing) {
-        decision = allOrNothingDecision(next);
+      if (isCognitivelyRelevant(next)) {
+        decision = cognitiveEntryDecision(next);
       } else {
         decision = decisionOf(
           `Então a fome ${next.hunger_level ?? "alta"}/10 chegou junto com esse contexto físico. O que passou pela tua cabeça quando foi decidir o que comer?`,
@@ -387,9 +389,10 @@ export function runDeterministicTurn(
       next.automatic_thought = next.automatic_thought || message;
       next.thought_self_identified =
         next.thought_self_identified ?? !THOUGHT_EXAMPLES.includes(message);
-      next.all_or_nothing = signals.allOrNothing;
-      if (signals.allOrNothing) {
-        decision = allOrNothingDecision(next);
+      next.all_or_nothing = next.all_or_nothing || signals.allOrNothing;
+      if (isCognitivelyRelevant(next)) {
+        next.cognitive_stage = "identifying";
+        decision = cognitiveEntryDecision(next);
       } else if (!next.behavior) {
         decision = behaviorDecision();
       } else if (!next.emotions.length) {
@@ -422,17 +425,21 @@ export function runDeterministicTurn(
 
     case "behavior": {
       next.behavior = next.behavior || message;
-      decision = recoveryDecision();
+      if (isCognitivelyRelevant(next)) {
+        next.thought_effect = next.thought_effect || message;
+        next.cognitive_stage = "examining_evidence";
+        decision = cognitiveExaminationDecision(next);
+      } else {
+        decision = recoveryDecision();
+      }
       break;
     }
 
     case "consequence": {
       next.consequence = message;
-      decision = decisionOf(
-        "Uma refeição sair diferente significa que a próxima também precisa sair?",
-        "alternative",
-        ["Não, não precisa", "Na prática acaba saindo", "Nunca pensei nisso"]
-      );
+      decision = isCognitivelyRelevant(next)
+        ? cognitiveExaminationDecision(next)
+        : recoveryDecision();
       break;
     }
 
@@ -472,24 +479,121 @@ export function runDeterministicTurn(
       break;
     }
 
+    case "cognitive_effect": {
+      next.thought_effect = mergeText(next.thought_effect, message);
+      if (!next.behavior && extracted.behavior) next.behavior = extracted.behavior;
+      next.cognitive_stage = "examining_evidence";
+      decision = cognitiveExaminationDecision(next);
+      break;
+    }
+
+    case "cognitive_examine": {
+      next.cognitive_examination = mergeText(next.cognitive_examination, message);
+      next.cognitive_stage = "seeking_perspective";
+      decision = cognitivePerspectiveDecision(next);
+      break;
+    }
+
+    case "cognitive_perspective": {
+      next.cognitive_perspective = mergeText(next.cognitive_perspective, message);
+      next.cognitive_stage = "building_alternative";
+      decision = decisionOf(
+        "Então qual seria uma forma mais justa de olhar pra isso?",
+        "alternative"
+      );
+      break;
+    }
+
     case "alternative": {
+      if (/nenhuma dessas|nenhuma delas|n[aã]o era nada disso/i.test(message)) {
+        next.alternative = undefined;
+        next.alternative_from_suggestion = false;
+        decision = decisionOf(
+          "Tá. O que essas frases não conseguem dizer sobre o que aconteceu contigo?",
+          "alternative"
+        );
+        break;
+      }
       next.alternative = message;
-      decision = next.recovery_outcome
+      next.alternative_from_suggestion = isSuggestedAlternative(message);
+      next.belief_level = null;
+      next.cognitive_stage = "checking_belief";
+      decision = next.alternative_from_suggestion
         ? decisionOf(
-            "O que ajudaria essa leitura a aparecer na hora em que isso acontece?",
-            "strategy",
-            buildStrategySuggestions(next)
+            "Quer deixar essa frase mais com a tua cara ou assim já diz o que tu pensa?",
+            "alternative_personalize",
+            ["Assim faz sentido", "Quero ajustar"]
           )
-        : decisionOf(
-            "E depois daquele momento, como foi o resto do dia?",
-            "recovery",
-            [
-              "Segui normalmente depois",
-              "Demorei, mas retomei",
-              "Acabei largando o resto do dia",
-              "Tentei compensar depois",
-            ]
-          );
+        : beliefDecision(next);
+      break;
+    }
+
+    case "alternative_personalize": {
+      if (/quero ajustar|ajustar|mudar a frase/i.test(message)) {
+        next.cognitive_stage = "building_alternative";
+        decision = decisionOf(
+          "Como tu diria essa ideia do teu jeito?",
+          "alternative"
+        );
+      } else if (/assim|faz sentido|pode ser/i.test(message)) {
+        next.cognitive_stage = "checking_belief";
+        decision = beliefDecision(next);
+      } else {
+        next.alternative = message;
+        next.alternative_from_suggestion = false;
+        next.cognitive_stage = "checking_belief";
+        decision = beliefDecision(next);
+      }
+      break;
+    }
+
+    case "alternative_belief": {
+      const belief = extractBelief(message);
+      if (belief == null) {
+        return finish(
+          { ...state, clarification_count: state.clarification_count + 1 },
+          decisionOf(
+            "Pode ser aproximado: 0 é nada verdadeira e 10 é muito verdadeira. Quanto essa frase parece verdadeira agora?",
+            "alternative_belief",
+            ["2", "5", "8", "10"],
+            { needsClarification: true }
+          ),
+          []
+        );
+      }
+      next.belief_level = belief;
+      if (belief <= 3) {
+        next.cognitive_stage = "refining_alternative";
+        decision = decisionOf(
+          "Essa frase ainda parece bonita mais do que verdadeira. O que deixa ela difícil de acreditar?",
+          "alternative_refine"
+        );
+      } else {
+        next.cognitive_stage = "completed";
+        next.alternative_recorded = true;
+        actions.push({
+          type: "upsert_alternative_thought",
+          original_thought: next.automatic_thought!,
+          alternative: next.alternative!,
+          belief_level: belief,
+        });
+        decision = decisionOf(
+          `Tá. A frase que faz sentido pra ti fica assim: “${shorten(next.alternative!)}”. Ela começa como um recurso ainda não testado, não como uma verdade pronta.`,
+          "done",
+          [],
+          { kind: "closing", suggestClose: true }
+        );
+      }
+      break;
+    }
+
+    case "alternative_refine": {
+      next.alternative_doubt = mergeText(next.alternative_doubt, message);
+      next.cognitive_stage = "building_alternative";
+      decision = decisionOf(
+        "Levando isso em conta, como tu deixaria a frase mais verdadeira e acreditável?",
+        "alternative"
+      );
       break;
     }
 
@@ -714,6 +818,19 @@ export function validateModelDecision(
   const mustStayPhysical =
     fallback.next_stage === "hunger" || fallback.next_stage === "physical_context";
   if (mustStayPhysical && parsed.next_stage !== fallback.next_stage) return fallback;
+  const cognitiveStages: ConversationStage[] = [
+    "cognitive_effect",
+    "cognitive_examine",
+    "cognitive_perspective",
+    "alternative",
+    "alternative_personalize",
+    "alternative_belief",
+    "alternative_refine",
+  ];
+  if (
+    cognitiveStages.includes(fallback.next_stage) &&
+    parsed.next_stage !== fallback.next_stage
+  ) return fallback;
 
   const memoryUpdates = parsed.memory_updates.map((memory) => {
     const directUserFact =
@@ -862,9 +979,31 @@ function alternatePath(
     decision_point: {
       reply: "Pensa na sequência toda. Teve algum momento em que ainda parecia possível escolher outra coisa?",
     },
+    cognitive_effect: {
+      reply: "Quis dizer o que esse pensamento puxou na prática. Tu continuou, desistiu do resto do dia ou aconteceu outra coisa?",
+      quickReplies: ["Continuei", "Desisti do resto do dia", "Tentei compensar", "Foi outra coisa"],
+    },
+    cognitive_examine: {
+      reply: "Vamos deixar mais concreto: essa frase vale em todas as situações ou apareceu por causa desse momento?",
+      quickReplies: ["Vale sempre", "Apareceu nesse momento", "Não tenho certeza"],
+    },
+    cognitive_perspective: {
+      reply: "Se isso tivesse acontecido com alguém que tu gosta, qual parte da conclusão pareceria exagerada?",
+    },
     alternative: {
-      reply: "Se fosse com alguém que tu gosta, essa refeição provaria que a pessoa estragou o dia inteiro?",
-      quickReplies: ["Não", "Talvez", "Nunca pensei assim"],
+      reply: "Tá. Vamos montar juntos. Qual dessas parece mais verdadeira, mesmo que ainda precise de ajuste?",
+      quickReplies: alternativeSuggestions(state),
+    },
+    alternative_personalize: {
+      reply: "Quis dizer se essa frase já parece tua ou se tu quer trocar alguma palavra.",
+      quickReplies: ["Assim faz sentido", "Quero ajustar"],
+    },
+    alternative_belief: {
+      reply: "De 0 a 10, quanto essa frase parece verdadeira pra ti agora?",
+      quickReplies: ["2", "5", "8", "10"],
+    },
+    alternative_refine: {
+      reply: "O que nessa frase não combina com o que tu vive de verdade?",
     },
     strategy: {
       reply: "Pensa numa ação bem pequena para a próxima vez. Qual dessas chega mais perto?",
@@ -939,18 +1078,97 @@ function highHungerDecision(state: ConversationEngineState): ConversationDecisio
   );
 }
 
-function allOrNothingDecision(state: ConversationEngineState): ConversationDecision {
-  const thought = state.automatic_thought || "já estraguei tudo";
+function cognitiveEntryDecision(state: ConversationEngineState): ConversationDecision {
+  const thought = state.automatic_thought || "esse pensamento";
+  state.cognitive_stage = "identifying";
   if (!state.behavior) {
     return decisionOf(
       `Tá. O pensamento foi “${shorten(thought)}”. E depois que ele apareceu, o que tu acabou fazendo?`,
       "behavior"
     );
   }
+  state.cognitive_stage = "examining_effect";
   return decisionOf(
-    `O pensamento foi “${shorten(thought)}” e depois veio o que tu fez. Como ficou o restante do dia?`,
-    "recovery",
-    recoveryReplies()
+    `E quando tu comprou essa ideia de que “${shorten(thought)}”, o que aconteceu depois?`,
+    "cognitive_effect"
+  );
+}
+
+function cognitiveExaminationDecision(
+  state: ConversationEngineState
+): ConversationDecision {
+  const thought = normalize(state.automatic_thought || "");
+  state.cognitive_stage = "examining_evidence";
+  if (/estraguei tudo|estragado tudo|tanto faz|perdi o dia|dia .*perdido|ja que/.test(thought)) {
+    return decisionOf(
+      "Quando tu fala “tudo”, o que exatamente foi estragado?",
+      "cognitive_examine"
+    );
+  }
+  if (/nao consigo me controlar|nunca consigo/.test(thought)) {
+    return decisionOf(
+      "Isso acontece em qualquer situação ou tem momentos específicos em que fica muito mais difícil?",
+      "cognitive_examine"
+    );
+  }
+  if (/eu mereco/.test(thought)) {
+    return decisionOf(
+      "Quando tu fala “eu mereço”, o que tu tá precisando naquela hora?",
+      "cognitive_examine"
+    );
+  }
+  if (/compenso|compensar|amanha/.test(thought)) {
+    return decisionOf(
+      "Quando tu pensa em compensar amanhã, o que tu espera que isso resolva?",
+      "cognitive_examine"
+    );
+  }
+  return decisionOf(
+    "Isso é o que aconteceu ou é a conclusão que veio depois?",
+    "cognitive_examine"
+  );
+}
+
+function cognitivePerspectiveDecision(
+  state: ConversationEngineState
+): ConversationDecision {
+  const thought = normalize(state.automatic_thought || "");
+  if (/estraguei tudo|estragado tudo|tanto faz|perdi o dia|dia .*perdido|ja que/.test(thought)) {
+    return decisionOf(
+      "O que aconteceu nessa refeição obriga a próxima a seguir pelo mesmo caminho?",
+      "cognitive_perspective"
+    );
+  }
+  if (/nao consigo me controlar|nunca consigo/.test(thought)) {
+    return decisionOf(
+      "Nas vezes em que tu conseguiu parar ou retomar, o que estava diferente?",
+      "cognitive_perspective"
+    );
+  }
+  if (/eu mereco/.test(thought)) {
+    return decisionOf(
+      "O que tu precisava era do alimento em si ou de algum alívio naquele dia ruim?",
+      "cognitive_perspective"
+    );
+  }
+  if (/compenso|compensar|amanha/.test(thought)) {
+    return decisionOf(
+      "Nas outras vezes em que tu tentou compensar, o que aconteceu depois?",
+      "cognitive_perspective"
+    );
+  }
+  return decisionOf(
+    "Olhando para os fatos, que parte dessa conclusão parece justa e que parte passou do ponto?",
+    "cognitive_perspective"
+  );
+}
+
+function beliefDecision(state: ConversationEngineState): ConversationDecision {
+  state.cognitive_stage = "checking_belief";
+  return decisionOf(
+    "De 0 a 10, quanto essa frase parece verdadeira pra ti agora?",
+    "alternative_belief",
+    ["2", "5", "8", "10"]
   );
 }
 
@@ -1027,6 +1245,12 @@ function toCapturedData(state: ConversationEngineState): ConversationCapturedDat
     all_or_nothing: state.all_or_nothing,
     thought_self_identified: state.thought_self_identified,
     emotion_self_identified: state.emotion_self_identified,
+    thought_effect: state.thought_effect,
+    cognitive_stage: state.cognitive_stage,
+    alternative_thought: state.alternative_recorded ? state.alternative : undefined,
+    belief_level: state.alternative_recorded
+      ? state.belief_level ?? undefined
+      : undefined,
     evidence: state.captured_evidence.length ? state.captured_evidence.slice(-20) : undefined,
   };
 }
@@ -1076,6 +1300,75 @@ function extractHunger(text: string): number | null {
   if (/m[eé]dia|entre 4 e 6/i.test(text)) return 5;
   if (/baixa|at[eé] 3|pouca/i.test(text)) return 2;
   return null;
+}
+
+function extractBelief(text: string): number | null {
+  const match = normalize(text).match(/(?:^|\b)(10|[0-9])(?:\s*\/\s*10)?(?:\b|$)/);
+  return match ? Number(match[1]) : null;
+}
+
+function isCognitivelyRelevant(state: ConversationEngineState): boolean {
+  if (!state.automatic_thought) return false;
+  if (state.main_influencing_factor === "practical") return false;
+  return Boolean(
+    state.all_or_nothing ||
+      RE.cognitiveThought.test(state.automatic_thought) ||
+      state.recovery_outcome === "abandonou_dia" ||
+      state.recovery_outcome === "compensou" ||
+      (state.guilt_level ?? 0) >= 7
+  );
+}
+
+function alternativeSuggestions(state: ConversationEngineState): string[] {
+  const thought = normalize(state.automatic_thought || "");
+  if (/nao consigo me controlar|nunca consigo/.test(thought)) {
+    return [
+      "Isso fica mais difícil em algumas situações, não em todas.",
+      "Uma situação difícil não prova que eu nunca consigo.",
+      "Posso perceber o que torna alguns momentos mais difíceis.",
+      "Nenhuma dessas",
+    ];
+  }
+  if (/eu mereco/.test(thought)) {
+    return [
+      "Eu precisava de alívio, e posso entender melhor essa necessidade.",
+      "Querer algo bom não me obriga a continuar no automático.",
+      "Posso querer a comida sem fingir que ela resolve o dia ruim.",
+      "Nenhuma dessas",
+    ];
+  }
+  if (/compenso|amanha/.test(thought)) {
+    return [
+      "Compensar amanhã não apaga o que aconteceu hoje.",
+      "Posso retomar sem transformar isso em punição.",
+      "Restringir depois costuma prolongar o problema.",
+      "Nenhuma dessas",
+    ];
+  }
+  return [
+    "Foi uma refeição diferente, não o dia inteiro.",
+    "Ainda posso decidir o que faço depois.",
+    "Sair do planejado não me obriga a continuar.",
+    "Nenhuma dessas",
+  ];
+}
+
+function isSuggestedAlternative(message: string): boolean {
+  const normalized = normalize(message);
+  return [
+    "foi uma refeicao diferente, nao o dia inteiro",
+    "ainda posso decidir o que faco depois",
+    "sair do planejado nao me obriga a continuar",
+    "isso fica mais dificil em algumas situacoes, nao em todas",
+    "uma situacao dificil nao prova que eu nunca consigo",
+    "posso perceber o que torna alguns momentos mais dificeis",
+    "eu precisava de alivio, e posso entender melhor essa necessidade",
+    "querer algo bom nao me obriga a continuar no automatico",
+    "posso querer a comida sem fingir que ela resolve o dia ruim",
+    "compensar amanha nao apaga o que aconteceu hoje",
+    "posso retomar sem transformar isso em punicao",
+    "restringir depois costuma prolongar o problema",
+  ].includes(normalized.replace(/[.!?]+$/, ""));
 }
 
 function extractThought(text: string): string {
@@ -1134,7 +1427,12 @@ function asksKnownField(
     later_consequence: state.later_consequence,
     recovery: state.recovery_outcome,
     decision_point: state.decision_point,
+    cognitive_effect: state.thought_effect,
+    cognitive_examine: state.cognitive_examination,
+    cognitive_perspective: state.cognitive_perspective,
     alternative: state.alternative,
+    alternative_belief: state.belief_level,
+    alternative_refine: state.alternative_doubt,
     strategy: state.strategy,
     prepare_situation: state.situation,
     prepare_obstacle: state.preparation_obstacle,
@@ -1173,7 +1471,13 @@ function isStageCompatible(
     "later_consequence",
     "recovery",
     "decision_point",
+    "cognitive_effect",
+    "cognitive_examine",
+    "cognitive_perspective",
     "alternative",
+    "alternative_personalize",
+    "alternative_belief",
+    "alternative_refine",
     "strategy",
     "done",
   ];

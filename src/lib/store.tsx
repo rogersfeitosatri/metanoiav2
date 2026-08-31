@@ -25,6 +25,7 @@ import type {
   EventTimePrecision,
 } from "./types";
 import type { EpisodeCreateInput } from "./behavioral-episodes";
+import { resolveAlternativeThought } from "./alternative-thoughts";
 import { buildDemoDatabase, uid, USER_ID, ADMIN_ID } from "./demo-data";
 import { computeConsistency } from "./consistency";
 import { classifyPatterns, type PatternSummary } from "./patterns";
@@ -578,7 +579,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const hasThoughtRecordCore = Boolean(
         answers.situation &&
           answers.automatic_thought &&
-          incomingEmotions.length &&
           answers.behavior
       );
       const consequence = [
@@ -609,8 +609,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
                 answers.decision_point as string
               ) || undefined,
             alternative_thought:
-              existingThought?.alternative_thought ||
               (answers.alternative_thought as string) ||
+              existingThought?.alternative_thought ||
               undefined,
             hunger_level:
               (answers.hunger_intensity as number) ?? existingThought?.hunger_level ?? null,
@@ -687,26 +687,50 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const addAlternativeThought: StoreValue["addAlternativeThought"] = useCallback(
     (input) => {
       const nowIso = new Date().toISOString();
-      const row: AlternativeThought = {
-        id: genId("alt"),
-        user_id: input.user_id,
-        thought_record_id: input.thought_record_id ?? null,
-        original_thought: input.original_thought,
-        alternative: input.alternative,
-        belief_level: input.belief_level ?? null,
-        result: input.result || "pending",
-        times_used: input.times_used ?? 0,
-        last_used_at: input.last_used_at ?? null,
-        created_at: nowIso,
-        updated_at: nowIso,
-      };
+      const existing = input.thought_record_id
+        ? db.alternative_thoughts.find(
+            (item) => item.thought_record_id === input.thought_record_id
+          )
+        : undefined;
+      const row = input.thought_record_id && input.belief_level != null
+        ? resolveAlternativeThought(
+            existing,
+            {
+              user_id: input.user_id,
+              thought_record_id: input.thought_record_id,
+              original_thought: input.original_thought,
+              alternative: input.alternative,
+              belief_level: input.belief_level,
+            },
+            genId("alt"),
+            nowIso
+          )
+        : {
+            id: genId("alt"),
+            user_id: input.user_id,
+            thought_record_id: input.thought_record_id ?? null,
+            original_thought: input.original_thought,
+            alternative: input.alternative,
+            belief_level: input.belief_level ?? null,
+            result: "pending" as const,
+            times_used: 0,
+            last_used_at: null,
+            created_at: nowIso,
+            updated_at: nowIso,
+          };
       mutate((d) => {
-        d.alternative_thoughts.unshift(row);
+        const index = d.alternative_thoughts.findIndex((item) => item.id === row.id);
+        if (index >= 0) d.alternative_thoughts[index] = row;
+        else d.alternative_thoughts.unshift(row);
       });
-      sbInsert("alternative_thoughts", row as unknown as Record<string, unknown>);
+      if (existing) {
+        sbUpdate("alternative_thoughts", row.id, row as unknown as Record<string, unknown>);
+      } else {
+        sbInsert("alternative_thoughts", row as unknown as Record<string, unknown>);
+      }
       return row;
     },
-    [mutate, sbInsert]
+    [db.alternative_thoughts, mutate, sbInsert, sbUpdate]
   );
 
   const updateAlternativeThought: StoreValue["updateAlternativeThought"] = useCallback(

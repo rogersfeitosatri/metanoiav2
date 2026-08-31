@@ -98,7 +98,13 @@ export const ConversationStageSchema = z.enum([
   "later_consequence",
   "recovery",
   "decision_point",
+  "cognitive_effect",
+  "cognitive_examine",
+  "cognitive_perspective",
   "alternative",
+  "alternative_personalize",
+  "alternative_belief",
+  "alternative_refine",
   "strategy",
   "prepare_situation",
   "prepare_obstacle",
@@ -128,6 +134,17 @@ export const BehavioralFactorSchema = z.enum([
   "social",
   "mixed",
   "unknown",
+]);
+
+export const CognitiveStageSchema = z.enum([
+  "identifying",
+  "examining_effect",
+  "examining_evidence",
+  "seeking_perspective",
+  "building_alternative",
+  "checking_belief",
+  "refining_alternative",
+  "completed",
 ]);
 
 export const BehavioralEvidenceSchema = z.object({
@@ -187,7 +204,14 @@ export const ConversationEngineStateSchema = z.object({
   captured_evidence: z.array(BehavioralEvidenceSchema).max(60).default([]),
   all_or_nothing: z.boolean().optional(),
   guilt_level: z.number().min(0).max(10).nullable().optional(),
+  cognitive_stage: CognitiveStageSchema.optional(),
+  thought_effect: z.string().max(1000).optional(),
+  cognitive_examination: z.string().max(1000).optional(),
+  cognitive_perspective: z.string().max(1000).optional(),
   alternative: z.string().max(1000).optional(),
+  alternative_from_suggestion: z.boolean().optional(),
+  alternative_doubt: z.string().max(1000).optional(),
+  alternative_recorded: z.boolean().default(false),
   belief_level: z.number().min(0).max(10).nullable().optional(),
   strategy: z.string().max(1000).optional(),
   preparation_obstacle: z.string().max(1000).optional(),
@@ -237,6 +261,10 @@ export const ConversationCapturedDataSchema = z.object({
   all_or_nothing: z.boolean().optional(),
   thought_self_identified: z.boolean().optional(),
   emotion_self_identified: z.boolean().optional(),
+  thought_effect: z.string().max(1000).optional(),
+  cognitive_stage: CognitiveStageSchema.optional(),
+  alternative_thought: z.string().max(1000).optional(),
+  belief_level: z.number().min(0).max(10).optional(),
   evidence: z.array(BehavioralEvidenceSchema).max(20).optional(),
 });
 export type ConversationCapturedData = z.infer<typeof ConversationCapturedDataSchema>;
@@ -324,6 +352,12 @@ export const ConversationActionSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("create_strategy_trial"),
     title: z.string().min(1).max(300),
+  }),
+  z.object({
+    type: z.literal("upsert_alternative_thought"),
+    original_thought: z.string().min(1).max(1000),
+    alternative: z.string().min(1).max(1000),
+    belief_level: z.number().min(0).max(10),
   }),
   z.object({
     type: z.literal("update_strategy_trial"),
