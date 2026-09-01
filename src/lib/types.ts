@@ -138,8 +138,12 @@ export interface UserMemory {
   source: "user" | "ai" | "system";
   validation_status: "confirmed" | "proposed" | "rejected";
   confidence: number;
+  evidence_count?: number;
+  importance?: number;
   source_conversation_id?: string | null;
   last_used_at?: string | null;
+  last_confirmed_at?: string | null;
+  superseded_at?: string | null;
   created_at: string;
   updated_at: string;
 }

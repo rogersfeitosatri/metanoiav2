@@ -5,6 +5,7 @@ import { ConversationRequestSchema } from "@/lib/ai/schemas";
 import { analyzeSafetyLocal } from "@/lib/ai/safety";
 import { createServerSupabase } from "@/lib/supabase/server";
 import { isSupabaseConfigured, SUPABASE_URL } from "@/lib/supabase/config";
+import { buildServerUserBehaviorContext } from "@/lib/ai/user-behavior-context";
 
 export const runtime = "nodejs";
 
@@ -31,7 +32,7 @@ export async function POST(req: NextRequest) {
       { status: 400 }
     );
   }
-  const body = parsed.data;
+  let body = parsed.data;
   const message = (body.message || "").trim();
   if (body.operation === "message" && !message) {
     return NextResponse.json(
@@ -40,12 +41,37 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Segurança é executada e registrada antes de qualquer seleção de provedor.
+  // Segurança decide antes da recuperação longitudinal e de qualquer provedor.
   const safety = analyzeSafetyLocal(message);
   const alertRecorded =
     safety.risk && authData.user
       ? await recordRisk(authData.user.id, body.conversation_id, safety)
       : false;
+
+  if (safety.safe_message) {
+    body = ConversationRequestSchema.parse({ ...body, context: {} });
+  } else if (authClient && authData.user) {
+    const ownsContext = await validateOwnedContext(
+      authClient,
+      authData.user.id,
+      body.conversation_id,
+      body.episode_id
+    );
+    if (!ownsContext) {
+      return NextResponse.json({ error: "Conversa não encontrada." }, { status: 403 });
+    }
+    try {
+      const context = await buildServerUserBehaviorContext(authClient, authData.user.id, {
+        message,
+        intent: body.intent,
+        episodeId: body.episode_id,
+      });
+      body = ConversationRequestSchema.parse({ ...body, context });
+    } catch {
+      console.warn("Contexto comportamental indisponível; conversa continuou sem memória longitudinal.");
+      body = ConversationRequestSchema.parse({ ...body, context: {} });
+    }
+  }
 
   const response = await orchestrateConversation(body, {
     safety,
@@ -54,7 +80,40 @@ export async function POST(req: NextRequest) {
       console.warn(`Provedor ${provider} indisponível; fallback local aplicado.`);
     },
   });
-  return NextResponse.json(response);
+  return NextResponse.json(response, {
+    headers: { "Cache-Control": "private, no-store" },
+  });
+}
+
+async function validateOwnedContext(
+  supabase: NonNullable<Awaited<ReturnType<typeof createServerSupabase>>>,
+  userId: string,
+  conversationId?: string,
+  episodeId?: string
+) {
+  const checks = [];
+  if (conversationId) {
+    checks.push(
+      supabase
+        .from("conversations")
+        .select("id")
+        .eq("id", conversationId)
+        .eq("user_id", userId)
+        .maybeSingle()
+    );
+  }
+  if (episodeId) {
+    checks.push(
+      supabase
+        .from("behavioral_episodes")
+        .select("id")
+        .eq("id", episodeId)
+        .eq("user_id", userId)
+        .maybeSingle()
+    );
+  }
+  const results = await Promise.all(checks);
+  return results.every((result) => !result.error && Boolean(result.data?.id));
 }
 
 async function recordRisk(

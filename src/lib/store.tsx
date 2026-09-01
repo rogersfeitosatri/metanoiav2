@@ -27,6 +27,7 @@ import type {
 import type { EpisodeCreateInput } from "./behavioral-episodes";
 import { resolveAlternativeThought } from "./alternative-thoughts";
 import { strategyKey } from "./microexperiments";
+import { findEquivalentMemory } from "./ai/user-behavior-context";
 import { buildDemoDatabase, uid, USER_ID, ADMIN_ID } from "./demo-data";
 import { computeConsistency } from "./consistency";
 import { classifyPatterns, type PatternSummary } from "./patterns";
@@ -462,8 +463,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           source: "user",
           validation_status: "confirmed",
           confidence: 1,
+          evidence_count: 1,
+          importance: memoryImportance(memory_kind),
           source_conversation_id: null,
           last_used_at: null,
+          last_confirmed_at: nowIso,
+          superseded_at: null,
           created_at: nowIso,
           updated_at: nowIso,
         };
@@ -730,6 +735,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const saveCopingCard: StoreValue["saveCopingCard"] = useCallback(
     (userId, patch) => {
       let snapshot: CopingCard | null = null;
+      const memoryUpdates: Array<{ id: string; patch: Partial<UserMemory> }> = [];
       mutate((d) => {
         let card = d.coping_cards.find((c) => c.user_id === userId);
         if (!card) {
@@ -758,10 +764,43 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         card.completed_percentage = Math.round((filled / fields.length) * 100);
         card.updated_at = new Date().toISOString();
         snapshot = structuredClone(card);
+
+        const synchronizedFields: Array<[keyof CopingCard, string]> = [
+          ["main_goal", "objetivo"],
+          ["why_it_matters", "por_que_importa"],
+          ["desired_identity", "identidade_desejada"],
+          ["reminder_statement", "lembrete_pessoal"],
+        ];
+        for (const [field, topic] of synchronizedFields) {
+          if (!(field in patch)) continue;
+          const value = patch[field];
+          if (typeof value !== "string" || !value.trim()) continue;
+          const memory = d.user_memories.find(
+            (item) =>
+              item.user_id === userId &&
+              item.topic === topic &&
+              !item.superseded_at
+          );
+          if (!memory) continue;
+          const memoryPatch: Partial<UserMemory> = {
+            content: value.trim(),
+            source: "user",
+            validation_status: "confirmed",
+            confidence: 1,
+            evidence_count: (memory.evidence_count || 1) + 1,
+            last_confirmed_at: card.updated_at,
+            updated_at: card.updated_at,
+          };
+          Object.assign(memory, memoryPatch);
+          memoryUpdates.push({ id: memory.id, patch: memoryPatch });
+        }
       });
       if (snapshot) sbUpsert("coping_cards", snapshot as unknown as Record<string, unknown>, "user_id");
+      for (const item of memoryUpdates) {
+        sbUpdate("user_memories", item.id, item.patch as Record<string, unknown>);
+      }
     },
-    [mutate, sbUpsert]
+    [mutate, sbUpdate, sbUpsert]
   );
 
   const createConversation: StoreValue["createConversation"] = useCallback(
@@ -978,25 +1017,92 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const saveMemory: StoreValue["saveMemory"] = useCallback(
     (input) => {
       const nowIso = new Date().toISOString();
+      const ownerId = input.user_id || currentUserId || USER_ID;
+      const content = input.content.trim();
+      const equivalent = findEquivalentMemory(
+        db.user_memories.filter((item) => item.user_id === ownerId),
+        { memory_kind: input.memory_kind, topic: input.topic, content }
+      );
+      if (equivalent) {
+        const confirmed =
+          input.validation_status === "confirmed" ||
+          equivalent.validation_status === "confirmed";
+        const updated: Partial<UserMemory> = {
+          content:
+            input.validation_status === "confirmed" && content.length >= equivalent.content.length
+              ? content
+              : equivalent.content,
+          source: confirmed ? input.source || equivalent.source : equivalent.source,
+          validation_status:
+            input.validation_status === "rejected"
+              ? "rejected"
+              : confirmed
+                ? "confirmed"
+                : "proposed",
+          confidence: Math.max(equivalent.confidence, input.confidence ?? 0.7),
+          evidence_count: (equivalent.evidence_count || 1) + 1,
+          importance: Math.max(
+            equivalent.importance || memoryImportance(equivalent.memory_kind),
+            input.importance || memoryImportance(input.memory_kind)
+          ),
+          last_confirmed_at: confirmed ? nowIso : equivalent.last_confirmed_at || null,
+          superseded_at: null,
+          updated_at: nowIso,
+        };
+        mutate((d) => {
+          const memory = d.user_memories.find((item) => item.id === equivalent.id);
+          if (memory) Object.assign(memory, updated);
+        });
+        sbUpdate("user_memories", equivalent.id, updated as Record<string, unknown>);
+        return { ...equivalent, ...updated } as UserMemory;
+      }
+
+      const staleMemories = db.user_memories.filter(
+        (memory) =>
+          memory.user_id === ownerId &&
+          !memory.superseded_at &&
+          memory.validation_status === "confirmed" &&
+          input.validation_status === "confirmed" &&
+          ["fact", "identity", "anchor"].includes(memory.memory_kind) &&
+          memory.memory_kind === input.memory_kind &&
+          normalizeStoredText(memory.topic) === normalizeStoredText(input.topic)
+      );
       const memory: UserMemory = {
         id: genId("memory"),
-        user_id: input.user_id || currentUserId || USER_ID,
+        user_id: ownerId,
         memory_kind: input.memory_kind,
         topic: input.topic,
-        content: input.content.trim(),
+        content,
         source: input.source || "user",
         validation_status: input.validation_status || "confirmed",
         confidence: input.confidence ?? 1,
+        evidence_count: input.evidence_count ?? 1,
+        importance: input.importance ?? memoryImportance(input.memory_kind),
         source_conversation_id: input.source_conversation_id ?? null,
         last_used_at: input.last_used_at ?? null,
+        last_confirmed_at:
+          (input.validation_status || "confirmed") === "confirmed" ? nowIso : null,
+        superseded_at: null,
         created_at: nowIso,
         updated_at: nowIso,
       };
-      mutate((d) => d.user_memories.unshift(memory));
+      mutate((d) => {
+        for (const stale of staleMemories) {
+          const row = d.user_memories.find((item) => item.id === stale.id);
+          if (row) {
+            row.superseded_at = nowIso;
+            row.updated_at = nowIso;
+          }
+        }
+        d.user_memories.unshift(memory);
+      });
+      for (const stale of staleMemories) {
+        sbUpdate("user_memories", stale.id, { superseded_at: nowIso, updated_at: nowIso });
+      }
       sbInsert("user_memories", memory as unknown as Record<string, unknown>);
       return memory;
     },
-    [currentUserId, mutate, sbInsert]
+    [currentUserId, db.user_memories, mutate, sbInsert, sbUpdate]
   );
 
   const updateMemory: StoreValue["updateMemory"] = useCallback(
@@ -1246,6 +1352,12 @@ function normalizeStoredText(value: string): string {
     .replace(/[\u0300-\u036f]/g, "")
     .toLocaleLowerCase("pt-BR")
     .trim();
+}
+
+function memoryImportance(kind: MemoryKind): number {
+  if (kind === "anchor" || kind === "identity") return 9;
+  if (kind === "pattern" || kind === "protective_factor") return 7;
+  return kind === "hypothesis" ? 4 : 5;
 }
 
 function emptyDatabase(): Database {

@@ -26,16 +26,17 @@ import {
   ConversationEngineResponseSchema,
   ConversationEngineStateSchema,
   type ConversationAction,
-  type ConversationContext,
   type ConversationEngineState,
 } from "@/lib/ai/schemas";
+import {
+  behaviorContextSourceFromDatabase,
+  buildUserBehaviorContext,
+} from "@/lib/ai/user-behavior-context";
 import { useStore } from "@/lib/store";
-import { stableEffectiveStrategyTitles } from "@/lib/microexperiments";
 import type {
   BehavioralEpisode,
   Conversation,
   ConversationMessage,
-  MealSchedule,
 } from "@/lib/types";
 
 type Bubble = {
@@ -50,7 +51,6 @@ export function ConversationHome() {
   const searchParams = useSearchParams();
   const intent = parseConversationIntent(searchParams.get("intent"));
   const userId = store.currentUserId!;
-  const profile = store.currentProfile!;
   const [bubbles, setBubbles] = useState<Bubble[]>([]);
   const [quickReplies, setQuickReplies] = useState<string[]>([]);
   const [draft, setDraft] = useState("");
@@ -380,6 +380,7 @@ export function ConversationHome() {
           operation,
           message,
           conversation_id: conversationRef.current?.id,
+          episode_id: episodeRef.current?.id,
           intent: activeIntentRef.current,
           state: engineStateRef.current || undefined,
           history: history
@@ -389,7 +390,18 @@ export function ConversationHome() {
               from: item.from === "user" ? "user" : "assistant",
               text: item.text,
             })),
-          context: buildContext(),
+          context:
+            store.mode === "demo"
+              ? buildUserBehaviorContext(
+                  userId,
+                  {
+                    message,
+                    intent: activeIntentRef.current,
+                    episodeId: episodeRef.current?.id,
+                  },
+                  behaviorContextSourceFromDatabase(store.db, userId)
+                )
+              : undefined,
         }),
       });
       const json = await response.json().catch(() => ({}));
@@ -577,6 +589,13 @@ export function ConversationHome() {
             last_used_at: used ? new Date().toISOString() : alternative.last_used_at,
           });
         }
+      } else if (action.type === "update_memory_validation") {
+        store.updateMemory(action.memory_id, {
+          validation_status: action.validation_status,
+          confidence: action.validation_status === "confirmed" ? 1 : 0,
+          last_confirmed_at:
+            action.validation_status === "confirmed" ? new Date().toISOString() : null,
+        });
       }
     }
     if (relations.strategyTrialId && relations.difficultyEventId) {
@@ -585,71 +604,6 @@ export function ConversationHome() {
       });
     }
     return relations;
-  }
-
-  function buildContext(): ConversationContext {
-    const card = store.db.coping_cards.find((item) => item.user_id === userId);
-    const memories = store.db.user_memories.filter(
-      (item) => item.user_id === userId
-    );
-    const trials = store.db.strategy_trials.filter(
-      (item) => item.user_id === userId
-    );
-    const schedules = store.db.meal_schedules.filter(
-      (item) => item.user_id === userId && item.active
-    );
-    const dueMeal = findRelevantMeal(schedules);
-    return {
-      preferred_name: profile.preferred_name,
-      north: [
-        card?.main_goal,
-        card?.why_it_matters,
-        card?.desired_identity,
-        card?.reminder_statement,
-      ].filter((value): value is string => Boolean(value)),
-      confirmed_memories: memories
-        .filter((item) => item.validation_status === "confirmed")
-        .slice(0, 20)
-        .map((item) => item.content),
-      proposed_hypotheses: memories
-        .filter((item) => item.validation_status === "proposed")
-        .slice(0, 12)
-        .map((item) => item.content),
-      effective_strategies: stableEffectiveStrategyTitles(trials).slice(0, 12),
-      pending_strategies: trials
-        .filter(
-          (item) =>
-            item.result === "not_tested" || item.result === "situation_not_occurred"
-        )
-        .sort((a, b) => {
-          const aTime = a.planned_for ? new Date(a.planned_for).getTime() : 0;
-          const bTime = b.planned_for ? new Date(b.planned_for).getTime() : 0;
-          return aTime - bTime;
-        })
-        .slice(0, 12)
-        .map((item) => ({
-          id: item.id,
-          title: item.title_snapshot,
-          strategy_key: item.strategy_key,
-          trigger_context: item.trigger_context,
-          experiment_action: item.experiment_action,
-          test_objective: item.test_objective,
-          confidence_level: item.confidence_level,
-          alternative_thought_id: item.alternative_thought_id,
-          alternative_thought: item.alternative_thought_id
-            ? store.db.alternative_thoughts.find(
-                (thought) => thought.id === item.alternative_thought_id
-              )?.alternative || null
-            : null,
-        })),
-      meals: schedules.map((item) => ({
-        id: item.id,
-        name: item.name,
-        time: item.time_of_day.slice(0, 5),
-        due: item.id === dueMeal?.id,
-      })),
-      recent_learnings: [],
-    };
   }
 
   return (
@@ -746,24 +700,4 @@ function isPageReload(): boolean {
     "navigation"
   ) as PerformanceNavigationTiming[];
   return navigation.at(-1)?.type === "reload";
-}
-
-function findRelevantMeal(schedules: MealSchedule[]) {
-  const now = new Date();
-  const today = now.getDay();
-  const minutes = now.getHours() * 60 + now.getMinutes();
-  const closest = schedules
-    .filter((item) => item.days_of_week.includes(today))
-    .sort(
-      (a, b) =>
-        distance(a.time_of_day, minutes) - distance(b.time_of_day, minutes)
-    )[0];
-  return closest && distance(closest.time_of_day, minutes) <= 90
-    ? closest
-    : null;
-}
-
-function distance(time: string, minutes: number) {
-  const [hour, minute] = time.split(":").map(Number);
-  return Math.abs(hour * 60 + minute - minutes);
 }
