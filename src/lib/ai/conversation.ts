@@ -1,4 +1,5 @@
 import type { ConversationIntent } from "../conversation-intent";
+import { isUnsafeMicroexperiment } from "../microexperiments";
 import {
   assessBehavioralSufficiency,
   extractBehavioralData,
@@ -112,6 +113,19 @@ export function createConversationState(
     asked: [],
     pending_strategy_id: stage === "strategy_review" ? pending?.id : undefined,
     pending_strategy_title: stage === "strategy_review" ? pending?.title : undefined,
+    pending_strategy_key: stage === "strategy_review" ? pending?.strategy_key || undefined : undefined,
+    pending_strategy_trigger:
+      stage === "strategy_review" ? pending?.trigger_context || undefined : undefined,
+    pending_strategy_action:
+      stage === "strategy_review" ? pending?.experiment_action || undefined : undefined,
+    pending_strategy_objective:
+      stage === "strategy_review" ? pending?.test_objective || undefined : undefined,
+    pending_strategy_confidence:
+      stage === "strategy_review" ? pending?.confidence_level ?? undefined : undefined,
+    pending_alternative_thought_id:
+      stage === "strategy_review" ? pending?.alternative_thought_id || undefined : undefined,
+    pending_alternative_thought:
+      stage === "strategy_review" ? pending?.alternative_thought || undefined : undefined,
     meal_schedule_id: stage === "meal_status" ? dueMeal?.id : undefined,
     meal_name: stage === "meal_status" ? dueMeal?.name : undefined,
   });
@@ -126,9 +140,14 @@ export function createOpeningTurn(
 
   if (state.stage === "strategy_review" && state.pending_strategy_title) {
     decision = decisionOf(
-      `Na última vez, tu pensou em testar “${state.pending_strategy_title}”. Chegou a experimentar em alguma situação?`,
+      `Na última vez tu combinou testar “${state.pending_strategy_title}”. Essa situação aconteceu de novo?`,
       "strategy_review",
-      ["Ajudou", "Ajudou em parte", "Não ajudou", "Ainda não testei"]
+      [
+        "Sim, e testei",
+        "Aconteceu, mas não lembrei",
+        "Ainda não aconteceu",
+        "Não quero continuar",
+      ]
     );
   } else if (state.stage === "meal_status") {
     decision = decisionOf(
@@ -311,14 +330,14 @@ export function runDeterministicTurn(
       } else {
         next.context_recurrence = "unknown";
       }
-      decision = decisionOf(
-        next.context_recurrence === "recurring"
-          ? "Tá. Então não parece falta de vontade: tua rotina vem empurrando essa refeição para depois. Acho que já dá para entender melhor o que aconteceu aqui."
-          : "Entendi. Hoje a reunião bateu de frente com a refeição. Acho que já dá para entender melhor o que aconteceu aqui.",
-        "done",
-        [],
-        { kind: "reflection", suggestClose: true }
-      );
+      decision = next.context_recurrence === "recurring"
+        ? interventionPointDecision(next)
+        : decisionOf(
+            "Entendi. Hoje a rotina bateu de frente com a refeição. Como foi exceção, não precisa inventar uma técnica para preencher espaço.",
+            "done",
+            [],
+            { kind: "reflection", suggestClose: true }
+          );
       break;
     }
 
@@ -362,12 +381,13 @@ export function runDeterministicTurn(
       next.physical_context = mergeText(next.physical_context, message);
       if (isCognitivelyRelevant(next)) {
         decision = cognitiveEntryDecision(next);
-      } else {
+      } else if (!next.behavior) {
         decision = decisionOf(
-          `Então a fome ${next.hunger_level ?? "alta"}/10 chegou junto com esse contexto físico. O que passou pela tua cabeça quando foi decidir o que comer?`,
-          "thought",
-          ["Não lembro", "Não sei dizer"]
+          `Então tem um fator bem objetivo aqui: a fome ${next.hunger_level ?? "alta"}/10 chegou junto com um intervalo grande. O que aconteceu na prática quando tu chegou?`,
+          "behavior"
         );
+      } else {
+        decision = interventionPointDecision(next);
       }
       break;
     }
@@ -469,13 +489,13 @@ export function runDeterministicTurn(
             "Em que momento talvez ainda desse para fazer alguma coisa diferente, sem tentar compensar?",
             "decision_point"
           )
-        : strategyDecision(next);
+        : interventionPointDecision(next);
       break;
     }
 
     case "decision_point": {
       next.decision_point = mergeText(next.decision_point, message);
-      decision = strategyDecision(next);
+      decision = experimentActionDecision(next);
       break;
     }
 
@@ -577,12 +597,7 @@ export function runDeterministicTurn(
           alternative: next.alternative!,
           belief_level: belief,
         });
-        decision = decisionOf(
-          `Tá. A frase que faz sentido pra ti fica assim: “${shorten(next.alternative!)}”. Ela começa como um recurso ainda não testado, não como uma verdade pronta.`,
-          "done",
-          [],
-          { kind: "closing", suggestClose: true }
-        );
+        decision = interventionPointDecision(next);
       }
       break;
     }
@@ -598,19 +613,90 @@ export function runDeterministicTurn(
     }
 
     case "strategy": {
-      if (!RE.decline.test(message)) {
-        next.strategy = message;
-        next.strategy_recorded = true;
-        actions.push({ type: "create_strategy_trial", title: message });
+      next.experiment_action = message;
+      next.strategy = message;
+      next.experiment_objective = experimentObjective(next);
+      decision = triggerDecision(next);
+      break;
+    }
+
+    case "intervention_point": {
+      next.decision_point = mergeText(next.decision_point, message);
+      decision = experimentActionDecision(next);
+      break;
+    }
+
+    case "experiment_action": {
+      if (RE.decline.test(message)) {
+        decision = decisionOf(
+          "Tá. O episódio fica registrado sem transformar isso numa obrigação.",
+          "done",
+          [],
+          { kind: "closing", suggestClose: true }
+        );
+        break;
       }
-      decision = decisionOf(
-        next.strategy
-          ? `Fechou. A ideia fica como um teste: “${shorten(next.strategy)}”. Depois a gente olha se ajudou de verdade.`
-          : "Tá. O que tu contou ficou registrado, sem forçar uma estratégia agora.",
-        "done",
-        [],
-        { kind: "closing", suggestClose: true }
-      );
+      if (isUnsafeMicroexperiment(message)) {
+        decision = decisionOf(
+          "Isso parece entrar em compensação ou restrição, então não vou guardar como estratégia. Vale levar essa ideia para o profissional que te acompanha e pensar numa opção que não seja punição.",
+          "experiment_action",
+          safeExperimentOptions(next),
+          { kind: "guidance" }
+        );
+        break;
+      }
+      next.experiment_action = message;
+      next.strategy = message;
+      next.experiment_objective = experimentObjective(next);
+      decision = triggerDecision(next);
+      break;
+    }
+
+    case "experiment_trigger": {
+      next.experiment_trigger = message;
+      decision = confidenceDecision(next);
+      break;
+    }
+
+    case "experiment_confidence": {
+      const confidence = extractBelief(message);
+      if (confidence == null) {
+        decision = decisionOf(
+          "Pode ser aproximado: 0 é nenhuma chance de testar e 10 é muita chance. Quanto fica?",
+          "experiment_confidence",
+          ["2", "5", "7", "9"],
+          { needsClarification: true }
+        );
+        break;
+      }
+      next.experiment_confidence = confidence;
+      if (confidence <= 6) {
+        decision = decisionOf(
+          confidence <= 3
+            ? `${confidence}? Então ficou grande demais. Como fica uma versão menor, em uma ação concreta?`
+            : `Tá em ${confidence}. O que tu mudaria nessa ação para ela chegar mais perto de 7?`,
+          "experiment_adjust"
+        );
+      } else {
+        decision = completeExperiment(next, actions);
+      }
+      break;
+    }
+
+    case "experiment_adjust": {
+      if (isUnsafeMicroexperiment(message)) {
+        decision = decisionOf(
+          "Essa versão ainda depende de compensar ou restringir, então não vou guardar assim. Qual seria uma ação pequena sem punição?",
+          "experiment_adjust",
+          safeExperimentOptions(next),
+          { kind: "guidance" }
+        );
+        break;
+      }
+      next.experiment_adjustment = message;
+      next.experiment_action = message;
+      next.strategy = message;
+      decision = confidenceDecision(next);
       break;
     }
 
@@ -622,34 +708,17 @@ export function runDeterministicTurn(
 
     case "prepare_obstacle": {
       next.preparation_obstacle = message;
-      const suggestions = buildPreparationSuggestions(message, context);
-      decision = decisionOf(
-        "Pensando nisso, qual dessas ações parece realmente possível?",
-        "prepare_action",
-        suggestions,
-        {
-          strategyProposal: suggestions[0]
-            ? { title: suggestions[0], accepted_by_user: false }
-            : undefined,
-        }
-      );
+      next.main_influencing_factor = inferPreparationFactor(message);
+      next.decision_point = "antes de entrar na situação";
+      decision = experimentActionDecision(next, true);
       break;
     }
 
     case "prepare_action": {
-      if (!RE.decline.test(message)) {
-        next.strategy = message;
-        next.strategy_recorded = true;
-        actions.push({ type: "create_strategy_trial", title: message });
-      }
-      decision = decisionOf(
-        next.strategy
-          ? `Combinado. Isso fica como um teste para essa situação: “${shorten(next.strategy)}”.`
-          : "Tá. A preparação fica aberta, sem te prender a uma estratégia agora.",
-        "done",
-        [],
-        { kind: "closing", suggestClose: true }
-      );
+      next.experiment_action = message;
+      next.strategy = message;
+      next.experiment_objective = experimentObjective(next);
+      decision = triggerDecision(next);
       break;
     }
 
@@ -657,46 +726,177 @@ export function runDeterministicTurn(
       if (!next.pending_strategy_title) {
         next.pending_strategy_title = message;
         decision = decisionOf(
-          `Tá. Pensando em “${shorten(message)}”, tu chegou a testar isso?`,
+          `Tá. Pensando em “${shorten(message)}”, essa situação aconteceu de novo?`,
           "strategy_review",
-          ["Ajudou", "Ajudou em parte", "Não ajudou", "Ainda não testei"]
+          ["Sim, e testei", "Aconteceu, mas não lembrei", "Ainda não aconteceu"]
         );
         break;
       }
-      const result = mapStrategyResult(message);
-      next.strategy_review_result = result;
-      if (result !== "not_tested" && next.pending_strategy_id) {
-        actions.push({
-          type: "update_strategy_trial",
-          strategy_trial_id: next.pending_strategy_id,
-          result,
-          feedback: message,
-          title: next.pending_strategy_title,
-        });
-        if (result === "helped" || result === "partially_helped") {
-          actions.push({
-            type: "save_memory",
-            memory: {
-              memory_kind: "protective_factor",
-              topic: "estrategia_testada",
-              content: next.pending_strategy_title,
-              source: "user",
-              validation_status: "confirmed",
-              confidence: 1,
-            },
-          });
+      const occurrence = mapStrategyOccurrence(message);
+      if (occurrence === "tested") {
+        decision = decisionOf(
+          "O que mudou quando tu fez isso?",
+          "strategy_review_change",
+          ["Ajudou", "Ajudou em parte", "Não mudou nada"]
+        );
+      } else if (occurrence === "did_not_use") {
+        next.strategy_review_result = "did_not_use";
+        next.strategy_review_feedback = message;
+        if (next.pending_strategy_id) {
+          actions.push(strategyUpdate(next, "did_not_use", message));
         }
+        decision = decisionOf(
+          "Então a estratégia nem chegou a entrar na situação. O que poderia ajudar ela a aparecer na hora certa?",
+          "strategy_review_barrier"
+        );
+      } else if (occurrence === "situation_not_occurred") {
+        next.strategy_review_result = "situation_not_occurred";
+        if (next.pending_strategy_id) {
+          actions.push(strategyUpdate(next, "situation_not_occurred", message));
+        }
+        decision = decisionOf(
+          "Tá. Então ainda não existe evidência de que ajudou ou não ajudou. Ela continua como um teste pendente.",
+          "done",
+          [],
+          { kind: "closing", suggestClose: true }
+        );
+      } else if (occurrence === "discarded") {
+        next.strategy_review_result = "discarded";
+        if (next.pending_strategy_id) {
+          actions.push(strategyUpdate(next, "discarded", message));
+        }
+        decision = decisionOf(
+          "Tá. Vou encerrar essa tentativa sem tratar isso como fracasso.",
+          "done",
+          [],
+          { kind: "closing", suggestClose: true }
+        );
+      } else {
+        decision = decisionOf(
+          "Quero separar duas coisas: a situação aconteceu e tu testou, aconteceu mas tu não lembrou, ou ainda não aconteceu?",
+          "strategy_review",
+          ["Sim, e testei", "Aconteceu, mas não lembrei", "Ainda não aconteceu"],
+          { needsClarification: true }
+        );
       }
+      break;
+    }
+
+    case "strategy_review_change": {
+      const result = mapStrategyResult(message);
+      if (!result) {
+        decision = decisionOf(
+          "Olhando o que mudou, isso ajudou, ajudou só em parte ou não ajudou?",
+          "strategy_review_change",
+          ["Ajudou", "Ajudou em parte", "Não ajudou"],
+          { needsClarification: true }
+        );
+        break;
+      }
+      next.strategy_review_result = result;
+      next.strategy_review_feedback = message;
+      if (next.pending_alternative_thought_id) {
+        decision = decisionOf(
+          "E aquela resposta que tu tinha construído apareceu na hora?",
+          "strategy_review_cognitive",
+          [
+            "Lembrei e agi diferente",
+            "Lembrei, mas fiz igual",
+            "Na hora não lembrei",
+            "Usei, mas não ajudou",
+          ]
+        );
+      } else if (result === "helped") {
+        if (next.pending_strategy_id) actions.push(strategyUpdate(next, result, message));
+        decision = helpedThisTimeDecision();
+      } else {
+        if (next.pending_strategy_id) actions.push(strategyUpdate(next, result, message));
+        decision = decisionOf(
+          result === "partially_helped"
+            ? "Ajudou uma parte, mas não resolveu tudo. O que limitou a estratégia naquela hora?"
+            : "O que fez essa estratégia não funcionar naquela hora?",
+          "strategy_review_barrier"
+        );
+      }
+      break;
+    }
+
+    case "strategy_review_cognitive": {
+      const cognitiveResult = mapAlternativeResult(message);
+      if (!cognitiveResult) {
+        decision = decisionOf(
+          "Tu lembrou e agiu diferente, lembrou mas fez igual, não lembrou ou usou sem ajudar?",
+          "strategy_review_cognitive",
+          ["Lembrei e agi diferente", "Lembrei, mas fiz igual", "Na hora não lembrei", "Usei, mas não ajudou"],
+          { needsClarification: true }
+        );
+        break;
+      }
+      let result: Exclude<
+        NonNullable<ConversationEngineState["strategy_review_result"]>,
+        "not_tested"
+      > =
+        next.strategy_review_result && next.strategy_review_result !== "not_tested"
+          ? next.strategy_review_result
+          : "did_not_help";
+      if (cognitiveResult === "did_not_use") result = "did_not_use";
+      if (cognitiveResult === "did_not_help") result = "did_not_help";
+      next.strategy_review_result = result;
+      if (next.pending_strategy_id) actions.push(strategyUpdate(next, result, message));
+      if (next.pending_alternative_thought_id) {
+        actions.push({
+          type: "update_alternative_thought_result",
+          alternative_thought_id: next.pending_alternative_thought_id,
+          result: cognitiveResult,
+        });
+      }
+      decision = result === "helped"
+        ? helpedThisTimeDecision()
+        : decisionOf(
+            result === "did_not_use"
+              ? "Então talvez o problema não seja a frase em si: ela nem chegou a aparecer. O que ajudaria a lembrar dela?"
+              : "O que limitou isso naquela hora?",
+            "strategy_review_barrier"
+          );
+      break;
+    }
+
+    case "strategy_review_barrier": {
+      next.strategy_review_feedback = mergeText(next.strategy_review_feedback, message);
       decision = decisionOf(
-        result === "not_tested"
-          ? "Ela continua como possibilidade, não como algo que já funciona."
-          : result === "did_not_help"
-            ? "Tá. Então essa estratégia não ajudou nessa situação, e isso também é informação útil."
-            : "Entendi. Vou guardar que ela ajudou nessa situação, sem tratar como solução para tudo.",
-        "done",
-        [],
-        { kind: "closing", suggestClose: true }
+        "Olhando isso, vale adaptar, tentar a mesma ideia mais uma vez ou deixar essa ideia?",
+        "strategy_review_decision",
+        ["Adaptar", "Tentar igual", "Deixar essa ideia"]
       );
+      break;
+    }
+
+    case "strategy_review_decision": {
+      if (/deixar|parar|descartar/i.test(message)) {
+        decision = decisionOf(
+          "Tá. A tentativa fica encerrada com o que ela ensinou, sem virar obrigação.",
+          "done",
+          [],
+          { kind: "closing", suggestClose: true }
+        );
+      } else {
+        next.experiment_action = next.pending_strategy_action || next.pending_strategy_title;
+        next.strategy = next.experiment_action;
+        next.experiment_trigger = next.pending_strategy_trigger;
+        next.experiment_objective = next.pending_strategy_objective || experimentObjective(next);
+        next.experiment_confidence = null;
+        decision = /tentar igual/i.test(message)
+          ? confidenceDecision(next)
+          : next.strategy_review_result === "did_not_use"
+            ? decisionOf(
+                "Então vamos mexer no sinal. Como fica um gatilho mais visível para essa ação aparecer na hora?",
+                "experiment_trigger"
+              )
+            : decisionOf(
+                "Como fica uma versão diferente e mais simples dessa ação?",
+                "experiment_adjust"
+              );
+      }
       break;
     }
 
@@ -831,6 +1031,22 @@ export function validateModelDecision(
     cognitiveStages.includes(fallback.next_stage) &&
     parsed.next_stage !== fallback.next_stage
   ) return fallback;
+  const experimentStages: ConversationStage[] = [
+    "intervention_point",
+    "experiment_action",
+    "experiment_trigger",
+    "experiment_confidence",
+    "experiment_adjust",
+    "strategy_review",
+    "strategy_review_change",
+    "strategy_review_barrier",
+    "strategy_review_decision",
+    "strategy_review_cognitive",
+  ];
+  if (
+    experimentStages.includes(fallback.next_stage) &&
+    parsed.next_stage !== fallback.next_stage
+  ) return fallback;
 
   const memoryUpdates = parsed.memory_updates.map((memory) => {
     const directUserFact =
@@ -851,7 +1067,9 @@ export function validateModelDecision(
         ...parsed.strategy_proposal,
         accepted_by_user:
           parsed.strategy_proposal.accepted_by_user &&
-          (state.stage === "strategy" || state.stage === "prepare_action"),
+          (state.stage === "strategy" ||
+            state.stage === "prepare_action" ||
+            state.stage === "experiment_action"),
       }
     : undefined;
 
@@ -1009,6 +1227,23 @@ function alternatePath(
       reply: "Pensa numa ação bem pequena para a próxima vez. Qual dessas chega mais perto?",
       quickReplies: buildStrategySuggestions(state),
     },
+    intervention_point: {
+      reply: "Pensa na sequência como uma linha. Em qual momento ainda dava para mexer em uma coisa pequena?",
+    },
+    experiment_action: {
+      reply: "Não precisa ser a solução inteira. Qual é a menor ação observável que tu toparia testar?",
+      quickReplies: [...safeExperimentOptions(state), "Nenhuma dessas"],
+    },
+    experiment_trigger: {
+      reply: "Qual sinal concreto avisaria que chegou a hora: um horário, um lugar, uma sensação ou uma frase na cabeça?",
+    },
+    experiment_confidence: {
+      reply: "De 0 a 10, qual a chance real de tu testar isso quando o gatilho aparecer?",
+      quickReplies: ["2", "5", "7", "9"],
+    },
+    experiment_adjust: {
+      reply: "Como fica uma versão menor dessa ação, que dependa menos de esforço na hora?",
+    },
     prepare_situation: {
       reply: "Pensa numa situação que vai acontecer em breve. Onde tu vai estar?",
     },
@@ -1022,11 +1257,26 @@ function alternatePath(
     },
     strategy_review: {
       reply: state.pending_strategy_title
-        ? "Quando tu testou isso, ajudou, ajudou só em parte ou não ajudou?"
+        ? "A situação aconteceu e tu testou, aconteceu mas tu não lembrou, ou ainda não aconteceu?"
         : "Qual era a ação que tu queria testar?",
       quickReplies: state.pending_strategy_title
-        ? ["Ajudou", "Ajudou em parte", "Não ajudou", "Ainda não testei"]
+        ? ["Sim, e testei", "Aconteceu, mas não lembrei", "Ainda não aconteceu"]
         : undefined,
+    },
+    strategy_review_change: {
+      reply: "O que mudou na situação quando tu conseguiu testar a ação?",
+      quickReplies: ["Ajudou", "Ajudou em parte", "Não mudou nada"],
+    },
+    strategy_review_barrier: {
+      reply: "Qual foi o principal obstáculo para essa ideia entrar ou ajudar naquela hora?",
+    },
+    strategy_review_decision: {
+      reply: "Com isso em mente, vale adaptar, tentar igual ou deixar essa ideia?",
+      quickReplies: ["Adaptar", "Tentar igual", "Deixar essa ideia"],
+    },
+    strategy_review_cognitive: {
+      reply: "Tu lembrou da frase e agiu diferente, lembrou mas fez igual, não lembrou ou ela não ajudou?",
+      quickReplies: ["Lembrei e agi diferente", "Lembrei, mas fiz igual", "Na hora não lembrei", "Usei, mas não ajudou"],
     },
     meal_selection: {
       reply: "Quis dizer qual momento tu quer registrar: café, almoço, lanche, jantar ou outro?",
@@ -1193,11 +1443,200 @@ function recoveryReplies(): string[] {
   ];
 }
 
-function strategyDecision(state: ConversationEngineState): ConversationDecision {
+function interventionPointDecision(state: ConversationEngineState): ConversationDecision {
+  if (state.decision_point) return experimentActionDecision(state);
+  if (state.main_influencing_factor === "physical" || (state.hunger_level ?? 0) >= 7) {
+    return decisionOf(
+      "Olhando a sequência toda, onde seria mais fácil mexer: antes da fome chegar no limite ou quando tu entra na situação?",
+      "intervention_point",
+      ["Antes da fome chegar no limite", "Quando entro na situação"]
+    );
+  }
+  if (state.main_influencing_factor === "practical") {
+    return decisionOf(
+      "Olhando a sequência toda, onde parece mais fácil mexer: antes da rotina apertar ou quando o horário já passou?",
+      "intervention_point",
+      ["Antes da rotina apertar", "Quando o horário passar"]
+    );
+  }
+  if (state.alternative) {
+    return decisionOf(
+      "Essa frase só ajuda se aparecer na hora certa. Em que momento seria mais útil lembrar dela?",
+      "intervention_point"
+    );
+  }
   return decisionOf(
-    "Olhando agora, tem uma coisa pequena que seria possível fazer diferente numa próxima vez?",
-    "strategy",
-    buildStrategySuggestions(state)
+    "Olhando a sequência toda, onde parece que seria mais fácil mexer em alguma coisa?",
+    "intervention_point"
+  );
+}
+
+function experimentActionDecision(
+  state: ConversationEngineState,
+  preparation = false
+): ConversationDecision {
+  const options = safeExperimentOptions(state);
+  const intro = preparation
+    ? "Tenho duas possibilidades que combinam com o obstáculo que tu trouxe."
+    : "Dá para mexer em uma coisa só nesse ponto.";
+  return decisionOf(
+    `${intro} Qual parece mais possível na tua rotina?`,
+    "experiment_action",
+    [...options, "Nenhuma dessas"].slice(0, 3),
+    {
+      strategyProposal: options[0]
+        ? {
+            title: options[0],
+            accepted_by_user: false,
+            trigger_context: state.decision_point,
+            experiment_action: options[0],
+            test_objective: experimentObjective(state),
+          }
+        : undefined,
+    }
+  );
+}
+
+function safeExperimentOptions(state: ConversationEngineState): string[] {
+  if (state.alternative) {
+    return [
+      "Lembrar dessa frase antes da próxima decisão",
+      "Deixar essa frase visível perto do momento do gatilho",
+    ];
+  }
+  if (state.main_influencing_factor === "practical") {
+    return [
+      "Definir um plano B antes da rotina apertar",
+      "Criar um sinal para perceber o horário antes de ficar sem opção",
+    ];
+  }
+  if (state.main_influencing_factor === "physical" || (state.hunger_level ?? 0) >= 7) {
+    return [
+      "Perceber a fome antes de ela passar de 7",
+      "Criar um sinal para não deixar o intervalo chegar ao limite",
+    ];
+  }
+  if (state.main_influencing_factor === "emotional" || state.emotion) {
+    return [
+      "Ficar dois minutos sem decidir nada",
+      "Perceber do que preciso antes de abrir o delivery",
+    ];
+  }
+  return [
+    "Fazer uma pausa antes da próxima decisão",
+    "Perceber o primeiro sinal de que a sequência começou",
+  ];
+}
+
+function triggerDecision(state: ConversationEngineState): ConversationDecision {
+  const suggestions = [
+    state.alternative && state.automatic_thought
+      ? `Quando aparecer “${shorten(state.automatic_thought)}”`
+      : "",
+    state.decision_point ? `Quando ${lowerFirst(shorten(state.decision_point))}` : "",
+    state.intent === "prepare" && state.situation
+      ? `Quando chegar em “${shorten(state.situation)}”`
+      : "",
+  ].filter(Boolean);
+  return decisionOf(
+    "Qual é o sinal claro de que chegou a hora de testar essa ação?",
+    "experiment_trigger",
+    [...new Set(suggestions)].slice(0, 3)
+  );
+}
+
+function confidenceDecision(state: ConversationEngineState): ConversationDecision {
+  const trigger = state.experiment_trigger || state.decision_point || "a situação aparecer";
+  const action = state.experiment_action || state.strategy || "fazer essa ação";
+  return decisionOf(
+    `Então fica: se ${lowerFirst(shorten(trigger))}, tu vai ${lowerFirst(shorten(action))}. De 0 a 10, qual a chance de tu realmente testar isso?`,
+    "experiment_confidence",
+    ["2", "5", "7", "9"]
+  );
+}
+
+function completeExperiment(
+  state: ConversationEngineState,
+  actions: ConversationAction[]
+): ConversationDecision {
+  const trigger = state.experiment_trigger || state.decision_point || state.situation;
+  const action = state.experiment_action || state.strategy;
+  if (!trigger || !action || state.experiment_confidence == null) {
+    return decisionOf(
+      "Quero deixar o teste observável. Qual ação concreta tu vai experimentar?",
+      "experiment_action"
+    );
+  }
+  if (isUnsafeMicroexperiment(`${trigger} ${action}`)) {
+    return decisionOf(
+      "Não vou guardar compensação ou restrição como estratégia. Qual ação pequena pode aumentar tua margem de escolha sem virar punição?",
+      "experiment_action",
+      safeExperimentOptions(state),
+      { kind: "guidance" }
+    );
+  }
+  state.strategy_recorded = true;
+  state.strategy = action;
+  actions.push({
+    type: "create_strategy_trial",
+    title: `Se ${lowerFirst(shorten(trigger))}, então ${lowerFirst(shorten(action))}`,
+    trigger_context: trigger,
+    experiment_action: action,
+    test_objective: state.experiment_objective || experimentObjective(state),
+    confidence_level: state.experiment_confidence,
+    planned_for: null,
+    alternative_thought: state.alternative || null,
+  });
+  return decisionOf(
+    `Combinado como experimento, não como obrigação: se ${lowerFirst(shorten(trigger))}, então ${lowerFirst(shorten(action))}. A confiança ficou em ${state.experiment_confidence}/10. Depois a gente olha o que aconteceu de verdade.`,
+    "done",
+    [],
+    { kind: "closing", suggestClose: true }
+  );
+}
+
+function experimentObjective(state: ConversationEngineState): string {
+  if (state.alternative) return "Fazer a resposta alternativa aparecer antes da próxima decisão.";
+  if (state.main_influencing_factor === "physical" || (state.hunger_level ?? 0) >= 7) {
+    return "Perceber o fator físico mais cedo e aumentar a margem de escolha.";
+  }
+  if (state.main_influencing_factor === "practical") {
+    return "Reduzir o impacto do obstáculo prático com uma resposta antecipada.";
+  }
+  if (state.main_influencing_factor === "emotional" || state.emotion) {
+    return "Criar espaço entre o estado emocional e a próxima decisão.";
+  }
+  return "Testar uma resposta pequena e observável nessa situação.";
+}
+
+function inferPreparationFactor(text: string): ConversationEngineState["main_influencing_factor"] {
+  if (/fome|sono|cansa|intervalo/i.test(text)) return "physical";
+  if (/hor[aá]rio|tempo|reuni[aã]o|op[cç][aã]o|rotina|viagem/i.test(text)) return "practical";
+  if (/ansios|emo[cç][aã]o|estress|raiva|frustr/i.test(text)) return "emotional";
+  if (/pens|estraguei|tanto faz|mere[cç]o/i.test(text)) return "cognitive";
+  return "unknown";
+}
+
+function strategyUpdate(
+  state: ConversationEngineState,
+  result: Exclude<NonNullable<ConversationEngineState["strategy_review_result"]>, "not_tested">,
+  feedback: string
+): Extract<ConversationAction, { type: "update_strategy_trial" }> {
+  return {
+    type: "update_strategy_trial",
+    strategy_trial_id: state.pending_strategy_id!,
+    result,
+    feedback,
+    title: state.pending_strategy_title || "Estratégia",
+  };
+}
+
+function helpedThisTimeDecision(): ConversationDecision {
+  return decisionOf(
+    "Ajudou dessa vez. Vou guardar como uma tentativa que ajudou, sem chamar ainda de algo que sempre funciona pra ti.",
+    "done",
+    [],
+    { kind: "closing", suggestClose: true }
   );
 }
 
@@ -1256,35 +1695,21 @@ function toCapturedData(state: ConversationEngineState): ConversationCapturedDat
 }
 
 function buildStrategySuggestions(state: ConversationEngineState): string[] {
-  const suggestions: string[] = [];
-  if ((state.hunger_level ?? 0) >= 7) {
-    suggestions.push("Perceber a fome um pouco antes");
-    suggestions.push("Evitar passar tantas horas sem comer");
-  }
-  if (state.emotion) suggestions.push("Dar nome ao que estou sentindo antes de decidir");
-  if (state.all_or_nothing) suggestions.push("Retomar na próxima refeição, sem compensar");
-  suggestions.push("Fazer uma pausa curta antes de decidir");
-  return [...new Set(suggestions)].slice(0, 4);
+  return [...safeExperimentOptions(state), "Nenhuma dessas"];
 }
 
 function buildPreparationSuggestions(
   obstacle: string,
   context: ConversationContext
 ): string[] {
-  const suggestions: string[] = [];
-  if (/fome|hor[aá]rio|tempo|reuni[aã]o/i.test(obstacle)) {
-    suggestions.push("Olhar a fome antes de chegar nessa situação");
-    suggestions.push("Organizar uma alternativa prática com antecedência");
-  }
-  if (/press[aã]o|pessoa|coment[aá]rio/i.test(obstacle)) {
-    suggestions.push("Pensar antes no que quero responder");
-  }
-  if (/ansios|emo[cç][aã]o|estress|culpa/i.test(obstacle)) {
-    suggestions.push("Fazer uma pausa curta antes de decidir");
-  }
-  suggestions.push(...context.effective_strategies);
-  suggestions.push("Escolher uma ação pequena e realista");
-  return [...new Set(suggestions)].slice(0, 4);
+  const state = ConversationEngineStateSchema.parse({
+    intent: "prepare",
+    stage: "prepare_action",
+    asked: [],
+    preparation_obstacle: obstacle,
+    main_influencing_factor: inferPreparationFactor(obstacle),
+  });
+  return [...safeExperimentOptions(state), ...context.effective_strategies].slice(0, 3);
 }
 
 function extractHunger(text: string): number | null {
@@ -1388,12 +1813,33 @@ function mapRecovery(
 
 function mapStrategyResult(
   text: string
-): NonNullable<ConversationEngineState["strategy_review_result"]> {
-  if (/em parte/i.test(text)) return "partially_helped";
-  if (/n[ãa]o ajudou/i.test(text)) return "did_not_help";
-  if (/ainda n[ãa]o|n[ãa]o testei|situa[cç][aã]o n[ãa]o/i.test(text)) return "not_tested";
+): "helped" | "partially_helped" | "did_not_help" | null {
+  if (/em parte|um pouco|parcial/i.test(text)) return "partially_helped";
+  if (/n[ãa]o ajudou|n[ãa]o mudou|mudou nada/i.test(text)) return "did_not_help";
   if (/ajudou|funcionou/i.test(text)) return "helped";
-  return "not_tested";
+  return null;
+}
+
+function mapStrategyOccurrence(
+  text: string
+): "tested" | "did_not_use" | "situation_not_occurred" | "discarded" | null {
+  if (/n[ãa]o quero|deixar|parar com/i.test(text)) return "discarded";
+  if (/n[ãa]o aconteceu|ainda n[ãa]o|situa[cç][aã]o n[ãa]o/i.test(text)) {
+    return "situation_not_occurred";
+  }
+  if (/n[ãa]o lembrei|nem lembrei|esqueci/i.test(text)) return "did_not_use";
+  if (/sim|testei|usei|experimentei|aconteceu/i.test(text)) return "tested";
+  return null;
+}
+
+function mapAlternativeResult(
+  text: string
+): "helped_changed" | "thought_only" | "did_not_use" | "did_not_help" | null {
+  if (/agi diferente|fiz diferente|mudei o que fiz/i.test(text)) return "helped_changed";
+  if (/fiz igual|comportamento igual|n[ãa]o mudou o que fiz/i.test(text)) return "thought_only";
+  if (/n[ãa]o lembrei|nem lembrei|esqueci/i.test(text)) return "did_not_use";
+  if (/n[ãa]o ajudou/i.test(text)) return "did_not_help";
+  return null;
 }
 
 function mapMealStatus(
@@ -1452,9 +1898,25 @@ function isStageCompatible(
     "prepare_obstacle",
     "prepare_action",
     "strategy",
+    "intervention_point",
+    "experiment_action",
+    "experiment_trigger",
+    "experiment_confidence",
+    "experiment_adjust",
     "done",
   ];
-  const review: ConversationStage[] = ["strategy_review", "strategy", "done"];
+  const review: ConversationStage[] = [
+    "strategy_review",
+    "strategy_review_change",
+    "strategy_review_barrier",
+    "strategy_review_decision",
+    "strategy_review_cognitive",
+    "experiment_action",
+    "experiment_trigger",
+    "experiment_confidence",
+    "experiment_adjust",
+    "done",
+  ];
   const meal: ConversationStage[] = [
     "meal_selection",
     "meal_status",
@@ -1479,6 +1941,11 @@ function isStageCompatible(
     "alternative_belief",
     "alternative_refine",
     "strategy",
+    "intervention_point",
+    "experiment_action",
+    "experiment_trigger",
+    "experiment_confidence",
+    "experiment_adjust",
     "done",
   ];
   if (preparation.includes(current)) return preparation.includes(candidate);
@@ -1508,6 +1975,10 @@ function mergeText(current: string | undefined, addition: string): string {
 function shorten(text: string): string {
   const trimmed = text.trim().replace(/[.!?]+$/, "");
   return trimmed.length > 90 ? `${trimmed.slice(0, 90).trim()}...` : trimmed;
+}
+
+function lowerFirst(text: string): string {
+  return text ? `${text[0].toLocaleLowerCase("pt-BR")}${text.slice(1)}` : text;
 }
 
 function normalize(text: string): string {

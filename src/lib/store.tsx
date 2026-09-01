@@ -26,6 +26,7 @@ import type {
 } from "./types";
 import type { EpisodeCreateInput } from "./behavioral-episodes";
 import { resolveAlternativeThought } from "./alternative-thoughts";
+import { strategyKey } from "./microexperiments";
 import { buildDemoDatabase, uid, USER_ID, ADMIN_ID } from "./demo-data";
 import { computeConsistency } from "./consistency";
 import { classifyPatterns, type PatternSummary } from "./patterns";
@@ -638,23 +639,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
             created_at: existingThought?.created_at || nowIso,
           }
         : null;
-      let trial: StrategyTrial | null = null;
-      if (answers.commitment && answers.strategy_choice) {
-        trial = {
-          id: genId("trial"),
-          user_id: userId,
-          episode_id: episodeId || null,
-          strategy_id: null as unknown as string,
-          difficulty_event_id: event.id,
-          planned_for: new Date(Date.now() + 86400000).toISOString(),
-          tested_at: null,
-          result: "not_tested",
-          user_feedback: null,
-          title_snapshot: answers.strategy_choice as string,
-          created_at: nowIso,
-          updated_at: nowIso,
-        };
-      }
       mutate((d) => {
         const eventIndex = d.difficulty_events.findIndex((item) => item.id === event.id);
         if (eventIndex >= 0) d.difficulty_events[eventIndex] = event;
@@ -664,7 +648,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           if (thoughtIndex >= 0) d.thought_records[thoughtIndex] = thought;
           else d.thought_records.unshift(thought);
         }
-        if (trial) d.strategy_trials.unshift(trial);
       });
       if (existingEvent) {
         sbUpdate("difficulty_events", event.id, event as unknown as Record<string, unknown>);
@@ -678,7 +661,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           sbInsert("thought_records", thought as unknown as Record<string, unknown>);
         }
       }
-      if (trial) sbInsert("strategy_trials", trial as unknown as Record<string, unknown>);
       return { event, thought };
     },
     [db.difficulty_events, db.thought_records, mutate, sbInsert, sbUpdate]
@@ -918,8 +900,18 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         id: genId("trial"),
         user_id: input.user_id,
         episode_id: input.episode_id ?? null,
-        strategy_id: input.strategy_id ?? (null as unknown as string),
+        strategy_id: input.strategy_id ?? null,
+        strategy_key:
+          input.strategy_key ||
+          (input.trigger_context && input.experiment_action
+            ? strategyKey(input.trigger_context, input.experiment_action)
+            : null),
         difficulty_event_id: input.difficulty_event_id ?? null,
+        alternative_thought_id: input.alternative_thought_id ?? null,
+        trigger_context: input.trigger_context ?? null,
+        experiment_action: input.experiment_action ?? null,
+        test_objective: input.test_objective ?? null,
+        confidence_level: input.confidence_level ?? null,
         planned_for: input.planned_for ?? null,
         tested_at: input.tested_at ?? null,
         result: input.result || "not_tested",

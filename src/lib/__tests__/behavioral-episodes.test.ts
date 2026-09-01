@@ -220,6 +220,12 @@ describe("estado persistente e ciclo de vida", () => {
     const trialAction: ConversationAction = {
       type: "create_strategy_trial",
       title: "Deixar um lanche pronto",
+      trigger_context: "quando a reunião passar do horário",
+      experiment_action: "usar o plano B combinado",
+      test_objective: "reduzir o impacto do atraso",
+      confidence_level: 8,
+      planned_for: null,
+      alternative_thought: null,
     };
     const patch = patchEpisodeFromTurn(
       episode(),

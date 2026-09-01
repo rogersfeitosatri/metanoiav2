@@ -88,7 +88,7 @@ describe("habilidade cognitiva central", () => {
     expect(built.decision.reply).toMatch(/0 a 10/i);
 
     const believed = runDeterministicTurn(built.state, "8", CONTEXT);
-    expect(believed.state.stage).toBe("done");
+    expect(believed.state.stage).toBe("intervention_point");
     expect(believed.state.belief_level).toBe(8);
     expect(believed.actions).toContainEqual({
       type: "upsert_alternative_thought",
@@ -96,6 +96,7 @@ describe("habilidade cognitiva central", () => {
       alternative: "Foi uma refeição diferente, mas ainda posso seguir normalmente.",
       belief_level: 8,
     });
+    expect(believed.actions.some((action) => action.type === "create_strategy_trial")).toBe(false);
     expect(believed.actions.some((action) => action.type === "record_difficulty")).toBe(true);
   });
 

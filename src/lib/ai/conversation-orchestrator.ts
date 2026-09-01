@@ -171,6 +171,12 @@ CONTRATO DESTE TURNO
 - Não corrige o pensamento com frase motivacional; ajuda a pessoa a formular uma leitura realista.
 - Uma alternativa só conclui quando belief_level foi informado e é maior que 3.
 - cognitive_stage e os estágios cognitivos do fallback são obrigatórios; a IA pode humanizar a linguagem sem saltar etapas.
+- Uma estratégia nasce do ponto de decisão, tem gatilho e ação observáveis e é construída com o usuário.
+- Não oferece uma lista genérica de dicas nem prescreve alimentação.
+- Confiança abaixo de 7 exige reduzir ou ajustar o experimento antes de registrá-lo.
+- Uma tentativa nova começa como not_tested; nenhuma resposta a classifica como eficaz antes do follow-up.
+- No follow-up, diferencia situação não ocorrida, não lembrou, ajudou, ajudou parcialmente e não ajudou.
+- Compensação, restrição punitiva e exercício punitivo nunca viram estratégia.
 - Interpretações entram em memory_updates como source=ai e validation_status=proposed.
 - Não ordena gravação no banco e não afirma que alguém foi avisado.
 - O fallback determinístico abaixo já respeita segurança, intenção e fatores físicos. Só diverge dele quando o histórico realmente justificar.`;

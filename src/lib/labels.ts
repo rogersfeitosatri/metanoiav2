@@ -135,6 +135,8 @@ export const TRIAL_RESULT_LABELS: Record<TrialResult, string> = {
   did_not_help: "Não ajudou",
   not_tested: "Não consegui testar",
   situation_not_occurred: "A situação ainda não aconteceu",
+  did_not_use: "Não lembrou de usar",
+  discarded: "Encerrada",
 };
 
 export const IMMEDIATE_HELP_FEELINGS = [

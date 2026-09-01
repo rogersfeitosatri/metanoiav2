@@ -47,7 +47,7 @@ const SIGNALS: Signal[] = [
     category: "restricao_severa",
     severity: "medium",
     patterns: [
-      /fiquei (o dia|dois dias|24h|48h) sem comer|jejum (punitivo|de castigo)|passei fome de prop[óo]sito|n[ãa]o comi nada (o dia|hoje)/i,
+      /fiquei (o dia|dois dias|24h|48h) sem comer|jejum (punitivo|de castigo)|passei fome de prop[óo]sito|n[ãa]o comi nada (o dia|hoje)|n[ãa]o vou (?:comer|jantar|almo[cç]ar) (?:para|pra) compensar|amanh[ãa] n[ãa]o (?:como|janto|almo[cç]o)/i,
     ],
     message:
       "Entendi. Ficar longos períodos sem comer como forma de compensar costuma tornar os momentos difíceis ainda mais intensos depois. Isso é algo para olhar junto com o profissional que te acompanha.",

@@ -297,14 +297,22 @@ export type TrialResult =
   | "partially_helped"
   | "did_not_help"
   | "not_tested"
-  | "situation_not_occurred";
+  | "situation_not_occurred"
+  | "did_not_use"
+  | "discarded";
 
 export interface StrategyTrial {
   id: string;
   user_id: string;
   episode_id?: string | null;
-  strategy_id: string;
+  strategy_id: string | null;
+  strategy_key?: string | null;
   difficulty_event_id?: string | null;
+  alternative_thought_id?: string | null;
+  trigger_context?: string | null;
+  experiment_action?: string | null;
+  test_objective?: string | null;
+  confidence_level?: number | null;
   planned_for?: string | null;
   tested_at?: string | null;
   result: TrialResult;

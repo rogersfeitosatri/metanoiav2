@@ -30,6 +30,7 @@ import {
   type ConversationEngineState,
 } from "@/lib/ai/schemas";
 import { useStore } from "@/lib/store";
+import { stableEffectiveStrategyTitles } from "@/lib/microexperiments";
 import type {
   BehavioralEpisode,
   Conversation,
@@ -445,9 +446,16 @@ export function ConversationHome() {
     const relations: EpisodeRelations = {};
     const episodeId = episodeRef.current?.id || null;
     let thoughtRecordId: string | null = null;
-    const orderedActions = [...actions].sort((a, b) =>
-      a.type === "record_difficulty" ? -1 : b.type === "record_difficulty" ? 1 : 0
-    );
+    let alternativeThoughtId: string | null = null;
+    const actionRank = (action: ConversationAction) =>
+      action.type === "record_difficulty"
+        ? 0
+        : action.type === "upsert_alternative_thought"
+          ? 1
+          : action.type === "create_strategy_trial"
+            ? 3
+            : 2;
+    const orderedActions = [...actions].sort((a, b) => actionRank(a) - actionRank(b));
     for (const action of orderedActions) {
       if (action.type === "create_meal_checkin") {
         const checkin = store.addCheckin({
@@ -489,13 +497,14 @@ export function ConversationHome() {
             return difficulty?.episode_id === episodeId;
           })?.id;
         if (linkedThoughtId) {
-          store.addAlternativeThought({
+          const alternative = store.addAlternativeThought({
             user_id: userId,
             thought_record_id: linkedThoughtId,
             original_thought: action.original_thought,
             alternative: action.alternative,
             belief_level: action.belief_level,
           });
+          alternativeThoughtId = alternative.id;
         }
       } else if (action.type === "save_memory") {
         store.saveMemory({
@@ -503,20 +512,42 @@ export function ConversationHome() {
           source_conversation_id: conversationRef.current?.id || null,
         });
       } else if (action.type === "create_strategy_trial") {
-        const plannedFor = new Date(Date.now() + 86400000).toISOString();
+        const linkedAlternative = action.alternative_thought
+          ? store.db.alternative_thoughts.find(
+              (item) =>
+                item.user_id === userId &&
+                item.alternative === action.alternative_thought
+            )
+          : undefined;
+        const episodePlannedFor = episodeRef.current?.event_occurred_at;
+        const plannedFor =
+          action.planned_for ||
+          (episodePlannedFor && new Date(episodePlannedFor).getTime() > Date.now()
+            ? episodePlannedFor
+            : null);
         const trial = store.addStrategyTrial({
           user_id: userId,
           episode_id: episodeId,
           title_snapshot: action.title,
+          trigger_context: action.trigger_context,
+          experiment_action: action.experiment_action,
+          test_objective: action.test_objective,
+          confidence_level: action.confidence_level,
+          alternative_thought_id:
+            alternativeThoughtId || linkedAlternative?.id || null,
+          difficulty_event_id: relations.difficultyEventId || null,
           result: "not_tested",
           planned_for: plannedFor,
         });
         relations.strategyTrialId = trial.id;
         relations.strategyPlannedFor = plannedFor;
       } else if (action.type === "update_strategy_trial") {
+        const tested = ["helped", "partially_helped", "did_not_help"].includes(
+          action.result
+        );
         store.updateStrategyTrial(action.strategy_trial_id, {
           result: action.result,
-          tested_at: new Date().toISOString(),
+          tested_at: tested ? new Date().toISOString() : null,
           user_feedback: action.feedback,
         });
         relations.strategyTrialId = action.strategy_trial_id;
@@ -526,13 +557,25 @@ export function ConversationHome() {
             episode.status === "waiting_followup" &&
             episode.related_strategy_trial_id === action.strategy_trial_id
         );
-        if (originalEpisode) {
+        if (originalEpisode && action.result !== "situation_not_occurred") {
           store.updateEpisode(
             originalEpisode.id,
             resolveFollowupEpisodePatch(
               `Acompanhamento concluído: ${action.feedback}`
             )
           );
+        }
+      } else if (action.type === "update_alternative_thought_result") {
+        const alternative = store.db.alternative_thoughts.find(
+          (item) => item.id === action.alternative_thought_id
+        );
+        if (alternative) {
+          const used = action.result !== "did_not_use";
+          store.updateAlternativeThought(alternative.id, {
+            result: action.result,
+            times_used: alternative.times_used + (used ? 1 : 0),
+            last_used_at: used ? new Date().toISOString() : alternative.last_used_at,
+          });
         }
       }
     }
@@ -572,17 +615,33 @@ export function ConversationHome() {
         .filter((item) => item.validation_status === "proposed")
         .slice(0, 12)
         .map((item) => item.content),
-      effective_strategies: trials
+      effective_strategies: stableEffectiveStrategyTitles(trials).slice(0, 12),
+      pending_strategies: trials
         .filter(
           (item) =>
-            item.result === "helped" || item.result === "partially_helped"
+            item.result === "not_tested" || item.result === "situation_not_occurred"
         )
+        .sort((a, b) => {
+          const aTime = a.planned_for ? new Date(a.planned_for).getTime() : 0;
+          const bTime = b.planned_for ? new Date(b.planned_for).getTime() : 0;
+          return aTime - bTime;
+        })
         .slice(0, 12)
-        .map((item) => item.title_snapshot),
-      pending_strategies: trials
-        .filter((item) => item.result === "not_tested")
-        .slice(0, 12)
-        .map((item) => ({ id: item.id, title: item.title_snapshot })),
+        .map((item) => ({
+          id: item.id,
+          title: item.title_snapshot,
+          strategy_key: item.strategy_key,
+          trigger_context: item.trigger_context,
+          experiment_action: item.experiment_action,
+          test_objective: item.test_objective,
+          confidence_level: item.confidence_level,
+          alternative_thought_id: item.alternative_thought_id,
+          alternative_thought: item.alternative_thought_id
+            ? store.db.alternative_thoughts.find(
+                (thought) => thought.id === item.alternative_thought_id
+              )?.alternative || null
+            : null,
+        })),
       meals: schedules.map((item) => ({
         id: item.id,
         name: item.name,

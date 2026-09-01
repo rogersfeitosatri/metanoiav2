@@ -193,12 +193,15 @@ describe("adaptação determinística", () => {
     expect(turn.state.stage).toBe("meal_difficulty_consent");
   });
 
-  it("revisão avaliada gera atualização, não classificação automática", () => {
+  it("revisão pede evidência antes de atualizar o resultado", () => {
     const ctx = context({
       pending_strategies: [{ id: "trial-3", title: "Fazer uma pausa" }],
     });
     const state = createConversationState("review_strategy", ctx);
-    const turn = runDeterministicTurn(state, "Ajudou em parte", ctx);
+    const occurred = runDeterministicTurn(state, "Sim, e testei", ctx);
+    expect(occurred.state.stage).toBe("strategy_review_change");
+    expect(occurred.actions).toHaveLength(0);
+    const turn = runDeterministicTurn(occurred.state, "Ajudou em parte", ctx);
     expect(turn.actions[0]).toMatchObject({
       type: "update_strategy_trial",
       strategy_trial_id: "trial-3",
