@@ -141,11 +141,23 @@ function buildSystemPrompt(context: ConversationContext): string {
     context.proposed_hypotheses.length
       ? `Hipóteses não confirmadas: ${context.proposed_hypotheses.join("; ")}`
       : "",
+    context.rejected_hypotheses.length
+      ? `Hipóteses rejeitadas, que NÃO devem ser reapresentadas como verdade: ${context.rejected_hypotheses.map((item) => item.content).join("; ")}`
+      : "",
+    context.alternative_thoughts.length
+      ? `Respostas construídas pela própria pessoa para situações parecidas: ${context.alternative_thoughts.map((item) => `“${item.original_thought}” → “${item.alternative}”`).join("; ")}`
+      : "",
     context.effective_strategies.length
       ? `Estratégias avaliadas como úteis: ${context.effective_strategies.join("; ")}`
       : "",
     context.pending_strategies.length
       ? `Estratégias pendentes: ${context.pending_strategies.map((item) => item.title).join("; ")}`
+      : "",
+    context.ineffective_strategy_resources.length
+      ? `Estratégias que repetidamente não ajudaram e não devem ser sugeridas de novo sem investigar: ${context.ineffective_strategy_resources.map((item) => item.title).join("; ")}`
+      : "",
+    context.recent_episodes.length
+      ? `Episódios semelhantes recuperados: ${context.recent_episodes.map((item) => item.situation || item.automatic_thought).filter(Boolean).join("; ")}`
       : "",
     context.meals.length
       ? `Refeições cadastradas: ${context.meals.map((meal) => `${meal.name} às ${meal.time}`).join("; ")}`
@@ -178,6 +190,12 @@ CONTRATO DESTE TURNO
 - No follow-up, diferencia situação não ocorrida, não lembrou, ajudou, ajudou parcialmente e não ajudou.
 - Compensação, restrição punitiva e exercício punitivo nunca viram estratégia.
 - Interpretações entram em memory_updates como source=ai e validation_status=proposed.
+- O contexto acima foi recuperado pelo servidor para o usuário autenticado e já está limitado por relevância.
+- Fato confirmado pode orientar a conversa; hipótese proposta deve ser apresentada como possibilidade e confirmada; hipótese rejeitada não volta como verdade.
+- Retoma memórias de modo natural ("isso já apareceu"), sem datas exatas nem linguagem de vigilância.
+- Meu Norte serve para esclarecer escolhas, nunca para cobrar, culpar ou lembrar compromisso de forma moralista.
+- Não repete Meu Norte só porque ele está disponível. Usa apenas quando conversa diretamente com a dificuldade atual.
+- Estratégia com duas evidências de ajuda pode ser descrita como algo que tem ajudado; estratégia pendente nunca é eficaz.
 - Não ordena gravação no banco e não afirma que alguém foi avisado.
 - O fallback determinístico abaixo já respeita segurança, intenção e fatores físicos. Só diverge dele quando o histórico realmente justificar.`;
 }

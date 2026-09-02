@@ -69,6 +69,8 @@ const RE = {
   cognitiveThought:
     /estraguei tudo|estragado tudo|j[aá] que|tanto faz|perdi o dia|dia (?:j[aá] )?foi perdido|n[ãa]o consigo me controlar|nunca consigo (?:manter|me controlar)|eu mere[cç]o|amanh[ãa] (?:eu )?compenso|depois (?:eu )?compenso/i,
   decline: /n[ãa]o quero|prefiro n[ãa]o|deixa pra l[aá]|s[oó] registrar/i,
+  confirmsHypothesis: /^(?:sim|isso|exatamente|faz sentido|[ée] (?:exatamente )?isso|tem tudo a ver)\b/i,
+  rejectsHypothesis: /^(?:n[ãa]o|nada a ver|n[ãa]o [ée] isso|viajou|n[ãa]o faz sentido)\b/i,
 };
 
 export interface ConversationSignals {
@@ -301,6 +303,16 @@ export function runDeterministicTurn(
         );
       } else if (isCognitivelyRelevant(next)) {
         decision = cognitiveEntryDecision(next);
+      } else if (relevantProposedHypothesis(context)) {
+        const hypothesis = relevantProposedHypothesis(context)!;
+        next.pending_memory_id = hypothesis.id;
+        next.pending_memory_topic = hypothesis.topic;
+        next.pending_memory_content = hypothesis.content;
+        decision = decisionOf(
+          `Pode ser que eu esteja viajando, então me corrige: ${hypothesis.content} Faz sentido?`,
+          "memory_hypothesis_review",
+          ["É exatamente isso", "Faz sentido em parte", "Não tem a ver"]
+        );
       } else if (signals.emotional) {
         decision = next.automatic_thought
           ? next.behavior
@@ -509,8 +521,58 @@ export function runDeterministicTurn(
 
     case "cognitive_examine": {
       next.cognitive_examination = mergeText(next.cognitive_examination, message);
-      next.cognitive_stage = "seeking_perspective";
-      decision = cognitivePerspectiveDecision(next);
+      const remembered = context.alternative_thoughts[0];
+      if (remembered) {
+        next.alternative = remembered.alternative;
+        next.alternative_from_suggestion = true;
+        next.cognitive_stage = "checking_belief";
+        decision = decisionOf(
+          `Esse pensamento já apareceu antes. Tu tinha chegado numa resposta que fazia sentido: “${shorten(remembered.alternative)}”. Ela ainda faz sentido agora?`,
+          "alternative_personalize",
+          ["Assim faz sentido", "Quero ajustar"]
+        );
+      } else {
+        next.cognitive_stage = "seeking_perspective";
+        decision = cognitivePerspectiveDecision(next);
+      }
+      break;
+    }
+
+    case "memory_hypothesis_review": {
+      if (!next.pending_memory_id || !next.pending_memory_content) {
+        decision = behaviorDecision();
+        break;
+      }
+      if (RE.rejectsHypothesis.test(message)) {
+        actions.push({
+          type: "update_memory_validation",
+          memory_id: next.pending_memory_id,
+          validation_status: "rejected",
+        });
+        clearPendingMemory(next);
+        decision = decisionOf(
+          "Tá. Então não vou usar essa leitura como se fosse verdade. O que tu acabou fazendo nessa situação?",
+          "behavior"
+        );
+      } else if (RE.confirmsHypothesis.test(message)) {
+        actions.push({
+          type: "update_memory_validation",
+          memory_id: next.pending_memory_id,
+          validation_status: "confirmed",
+        });
+        clearPendingMemory(next);
+        decision = decisionOf(
+          "Entendi. Isso ajuda a ligar as coisas sem transformar a hipótese num rótulo. O que tu acabou fazendo nessa situação?",
+          "behavior"
+        );
+      } else {
+        decision = decisionOf(
+          "Peguei só uma parte. Essa leitura faz sentido, faz sentido em parte ou não tem a ver?",
+          "memory_hypothesis_review",
+          ["Faz sentido", "Em parte", "Não tem a ver"],
+          { needsClarification: true }
+        );
+      }
       break;
     }
 
@@ -1223,6 +1285,10 @@ function alternatePath(
     alternative_refine: {
       reply: "O que nessa frase não combina com o que tu vive de verdade?",
     },
+    memory_hypothesis_review: {
+      reply: "Quero só conferir, sem concluir por ti: essa leitura faz sentido, faz sentido em parte ou não tem a ver?",
+      quickReplies: ["Faz sentido", "Em parte", "Não tem a ver"],
+    },
     strategy: {
       reply: "Pensa numa ação bem pequena para a próxima vez. Qual dessas chega mais perto?",
       quickReplies: buildStrategySuggestions(state),
@@ -1342,6 +1408,18 @@ function cognitiveEntryDecision(state: ConversationEngineState): ConversationDec
     `E quando tu comprou essa ideia de que “${shorten(thought)}”, o que aconteceu depois?`,
     "cognitive_effect"
   );
+}
+
+function relevantProposedHypothesis(context: ConversationContext) {
+  return context.relevant_memories.find(
+    (memory) => memory.validation_status === "proposed" && memory.relevance >= 25
+  );
+}
+
+function clearPendingMemory(state: ConversationEngineState) {
+  state.pending_memory_id = undefined;
+  state.pending_memory_topic = undefined;
+  state.pending_memory_content = undefined;
 }
 
 function cognitiveExaminationDecision(

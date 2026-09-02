@@ -6,6 +6,7 @@ const ROOT = process.cwd();
 const HOME = join(ROOT, "src/components/chat/ConversationHome.tsx");
 const ROUTE = join(ROOT, "src/app/api/ai/chat/route.ts");
 const STORE = join(ROOT, "src/lib/store.tsx");
+const MEMORY_CONTEXT = join(ROOT, "src/lib/ai/user-behavior-context.ts");
 const COGNITIVE_MIGRATION = join(
   ROOT,
   "supabase/migrations/20260831203849_enforce_one_alternative_per_thought.sql"
@@ -30,6 +31,17 @@ describe("integração do motor canônico", () => {
     const source = readFileSync(ROUTE, "utf8");
     expect(source).toContain("orchestrateConversation");
     expect(source).not.toMatch(/localReply|motivationalPrompt|tccPrompt/);
+  });
+
+  it("monta contexto Supabase no servidor e usa o cliente somente no demo", () => {
+    const home = readFileSync(HOME, "utf8");
+    const route = readFileSync(ROUTE, "utf8");
+    const context = readFileSync(MEMORY_CONTEXT, "utf8");
+    expect(route).toContain("buildServerUserBehaviorContext");
+    expect(route).toContain('.eq("user_id", userId)');
+    expect(home).toContain('store.mode === "demo"');
+    expect(home).not.toContain("confirmed_memories:");
+    expect(context).not.toContain("professional_notes");
   });
 
   it("não mantém FlowChat, flow-engine ou endpoint converse concorrente", () => {

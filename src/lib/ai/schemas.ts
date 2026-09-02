@@ -119,6 +119,7 @@ export const ConversationStageSchema = z.enum([
   "strategy_review_barrier",
   "strategy_review_decision",
   "strategy_review_cognitive",
+  "memory_hypothesis_review",
   "meal_selection",
   "meal_status",
   "meal_success",
@@ -258,6 +259,9 @@ export const ConversationEngineStateSchema = z.object({
   checkin_recorded: z.boolean().default(false),
   active_checkin_id: z.string().max(200).optional(),
   last_question: z.string().max(600).optional(),
+  pending_memory_id: z.string().max(200).optional(),
+  pending_memory_topic: z.string().max(200).optional(),
+  pending_memory_content: z.string().max(800).optional(),
 });
 export type ConversationEngineState = z.infer<typeof ConversationEngineStateSchema>;
 
@@ -356,6 +360,61 @@ export const ConversationContextSchema = z.object({
     due: z.boolean().default(false),
   })).max(20).default([]),
   recent_learnings: z.array(z.string().max(800)).max(12).default([]),
+  north_items: z.array(z.object({
+    key: z.string().max(80),
+    content: z.string().max(1200),
+    relevance: z.number().min(0).max(100),
+  })).max(6).default([]),
+  relevant_memories: z.array(z.object({
+    id: z.string().max(200),
+    memory_kind: z.enum(["fact", "hypothesis", "anchor", "identity", "protective_factor", "pattern"]),
+    topic: z.string().max(200),
+    content: z.string().max(800),
+    validation_status: z.enum(["confirmed", "proposed"]),
+    confidence: z.number().min(0).max(1),
+    evidence_count: z.number().int().min(1),
+    relevance: z.number().min(0).max(100),
+  })).max(8).default([]),
+  rejected_hypotheses: z.array(z.object({
+    id: z.string().max(200),
+    topic: z.string().max(200),
+    content: z.string().max(800),
+  })).max(4).default([]),
+  alternative_thoughts: z.array(z.object({
+    id: z.string().max(200),
+    original_thought: z.string().max(1000),
+    alternative: z.string().max(1000),
+    belief_level: z.number().min(0).max(10).nullable(),
+    result: z.enum(["pending", "helped_changed", "thought_only", "did_not_use", "did_not_help"]),
+    relevance: z.number().min(0).max(100),
+  })).max(3).default([]),
+  effective_strategy_resources: z.array(z.object({
+    key: z.string().max(200),
+    title: z.string().max(500),
+    trigger_context: z.string().max(1000).nullable(),
+    experiment_action: z.string().max(1000).nullable(),
+    helped_count: z.number().int().min(0),
+    partial_count: z.number().int().min(0),
+    relevance: z.number().min(0).max(100),
+  })).max(3).default([]),
+  ineffective_strategy_resources: z.array(z.object({
+    key: z.string().max(200),
+    title: z.string().max(500),
+    did_not_help_count: z.number().int().min(0),
+    relevance: z.number().min(0).max(100),
+  })).max(2).default([]),
+  recent_episodes: z.array(z.object({
+    id: z.string().max(200),
+    situation: z.string().max(1200).nullable(),
+    automatic_thought: z.string().max(1000).nullable(),
+    main_influencing_factor: BehavioralFactorSchema.nullable(),
+    event_occurred_at: z.string().max(80).nullable(),
+    relevance: z.number().min(0).max(100),
+  })).max(3).default([]),
+  context_meta: z.object({
+    selected_items: z.number().int().min(0).max(40),
+    max_items: z.number().int().min(1).max(40),
+  }).optional(),
 }).default({});
 export type ConversationContext = z.infer<typeof ConversationContextSchema>;
 
@@ -363,10 +422,11 @@ export const ConversationRequestSchema = z.object({
   operation: z.enum(["start", "message"]).default("message"),
   message: z.string().max(2000).optional(),
   conversation_id: z.string().max(200).optional(),
+  episode_id: z.string().max(200).optional(),
   intent: ConversationIntentSchema.default("default"),
   state: ConversationEngineStateSchema.optional(),
   history: z.array(ConversationHistoryItemSchema).max(20).default([]),
-  context: ConversationContextSchema,
+  context: ConversationContextSchema.default({}),
 });
 export type ConversationRequest = z.infer<typeof ConversationRequestSchema>;
 
@@ -419,6 +479,11 @@ export const ConversationActionSchema = z.discriminatedUnion("type", [
     type: z.literal("update_alternative_thought_result"),
     alternative_thought_id: z.string().max(200),
     result: z.enum(["helped_changed", "thought_only", "did_not_use", "did_not_help"]),
+  }),
+  z.object({
+    type: z.literal("update_memory_validation"),
+    memory_id: z.string().max(200),
+    validation_status: z.enum(["confirmed", "rejected"]),
   }),
 ]);
 export type ConversationAction = z.infer<typeof ConversationActionSchema>;
