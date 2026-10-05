@@ -66,7 +66,7 @@ export async function orchestrateConversation(
   const configured = dependencies.llmConfigured ?? isLlmConfigured();
   const provider = dependencies.provider === undefined ? getProvider() : dependencies.provider;
 
-  if (!configured || !provider || provider.name === "local") {
+  if (!configured || !provider || provider.name === "local" || state.stage === 'meal_status') {
     return responseOf(
       local.decision,
       local.state,

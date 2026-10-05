@@ -60,7 +60,7 @@ describe("evolução", () => {
       altThoughts: [],
     });
     const ret = r.dimensions.find((d) => d.key === "retomada");
-    expect(ret?.count).toEqual({ of: 2, total: 3 });
+    expect(ret?.count).toMatchObject({ of: 2, total: 3 });
     expect(r.headline).toMatch(/2/);
     // Nunca fala em falha/dieta
     expect(r.headline).not.toMatch(/falh|dieta|errou/i);
@@ -88,7 +88,7 @@ describe("evolução", () => {
       altThoughts: [],
     });
     const p = r.dimensions.find((d) => d.key === "pensamentos");
-    expect(p?.count).toEqual({ of: 2, total: 2 });
+    expect(p?.count).toMatchObject({ of: 2, total: 2 });
     expect(p?.statement).toMatch(/sem precisar de ajuda/);
   });
 

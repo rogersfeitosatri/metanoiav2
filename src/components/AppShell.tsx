@@ -23,7 +23,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!store.ready) return;
     if (!store.currentProfile) {
-      router.replace("/");
+      const invitation=new URLSearchParams(window.location.search).get('invitation');
+      router.replace(invitation&&/^[a-f0-9-]{36}$/.test(invitation)?`/?next=${encodeURIComponent(`/app/hoje?invitation=${invitation}`)}`:'/');
     } else if (store.currentProfile.role !== "user") {
       router.replace(store.currentProfile.role === "professional" ? "/pro" : "/admin");
     } else if (!store.currentProfile.onboarding_completed) {

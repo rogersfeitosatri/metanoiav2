@@ -224,8 +224,7 @@ export function OnboardingChat() {
     if (loggingOut) return;
     setLoggingOut(true);
     await store.logout();
-    router.replace("/");
-    router.refresh();
+    window.location.replace("/");
   }
 
   const textSteps = ["difference", "pain", "meaning", "correction", "identity", "impact", "anchor", "meal_name"].includes(step);
