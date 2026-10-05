@@ -316,6 +316,95 @@ O último aparelho ativado é o destinatário; não há disparo simultâneo para
 - Advisor: inscrições sem políticas RLS são intencionais (somente servidor e grants
   revogados). O aviso preexistente de proteção contra senhas vazadas desativada
   permanece: https://supabase.com/docs/guides/auth/password-security#password-strength-and-leaked-password-protection.
-- Aprendizados/Passo 8, testes de carga do cron e validação real em aparelhos são
-  pendências separadas. Onboarding, Meu Norte e painel profissional não foram reconstruídos.
+- Testes de carga do cron e validação real em aparelhos são pendências separadas.
+  Aprendizados/Passo 8 foi retomado conforme a seção 11. Onboarding, Meu Norte e painel profissional não foram reconstruídos.
   Nenhuma implementação do Passo 11 foi iniciada.
+
+## 11. Passo 8 retomado: Aprendizados por evidência
+
+### Auditoria
+
+A tela anterior chamava `buildInsights` apenas com dificuldades, pensamentos e
+tentativas. Recebia pensamentos alternativos, mas não os usava. Confirmação e rejeição
+viviam em `useState`, sem persistência. O horário mais frequente e o motivo mais frequente
+podiam ser descritos como uma combinação mesmo pertencendo a situações diferentes.
+`patterns.ts` e o relatório semanal continuam atendendo consumidores legados e o painel
+profissional; não alimentam o novo Aprendizados nem foram reconstruídos neste passo.
+
+### Motor e evidência
+
+`src/lib/insights.ts` é a única função de seleção tanto no servidor quanto no demo.
+Lê episódios, complementa dados legados e evita contar a dificuldade e o episódio
+duas vezes. Preparações e convites sem ocorrência confirmada não viram evidência.
+Uma ou duas ocorrências não geram padrão visível; três situações relacionadas
+permitem uma hipótese cautelosa. Confirmar não prova causalidade.
+
+Combinações exigem os fatores na mesma situação: intervalo/almoço atrasado e fome
+alta; fome e cansaço; ansiedade, contexto social e noite. Sequências exigem desfechos
+relatados: tudo-ou-nada e abandono/compensação; recompensa, alívio imediato e culpa
+posterior. Pensamentos repetidos e percepção precoce da fome com retomada também
+podem gerar candidatos. Propostas de extração não contam como fatos, inclusive
+quando uma emoção relatada e outra proposta coexistem.
+
+Cada candidato possui chave estável, referências de evidência/episódios, confiança,
+status e horário de geração. A prioridade considera relevância comportamental,
+evidência e confirmação; não existe score do paciente. A tela limita-se a dois
+aprendizados, um recurso e um foco derivado dos dados. Candidatos redundantes com
+a mesma evidência são suprimidos. Não há chamada a LLM para inventar interpretações.
+
+O recorte de situações e testes é de 90 dias. Horários só são utilizados com
+precisão informada ou descrição de período, respeitando o fuso. `created_at` pode
+delimitar um registro sem data conhecida, mas nunca determina seu horário do evento.
+Não se conclui melhora a partir da diminuição de registros.
+
+### Recursos e memória
+
+Estratégias são agrupadas por identidade, separando tentativas. Só resultados de
+testes reais entram no denominador; parcial permanece separado. Não uso, descarte,
+situação não ocorrida e não testada não são eficácia. Resultados predominantemente
+negativos ou último resultado negativo não viram recomendação. Um teste positivo
+é descrito como "ajudou dessa vez", nunca como padrão consolidado.
+
+Pensamentos alternativos usam avaliações cognitivas ligadas à tentativa, deduplicadas.
+`times_used` não multiplica o último resultado. Registros legados são descritos apenas
+como último uso relatado; frases construídas e não utilizadas continuam sem eficácia.
+Fatores protetores exigem memória confirmada. Meu Norte usa o cartão atual somente
+quando o conteúdo se relaciona ao aprendizado, sem cobrança.
+
+Confirmações utilizam `user_memories`, tópico estável `aprendizados:<chave>`:
+`confirmed` para sim, `proposed` com confiança reduzida para mais ou menos e
+`rejected` para rejeição. Uma hipótese rejeitada não reaparece, inclusive quando
+semanticamente equivalente a uma rejeição da conversa. Não há reconsideração automática.
+Cliques repetidos não aumentam a contagem de evidências. Nenhuma nova tabela/migration.
+
+### Servidor, privacidade e persistência
+
+`/api/insights` autentica a sessão e verifica perfil, onboarding e acesso vigente.
+Busca apenas tabelas comportamentais do próprio usuário, com RLS e filtro explícito.
+Não usa service role nem consulta notas profissionais/dados administrativos.
+O cliente só envia chave e decisão; o servidor recalcula o candidato antes de gravar.
+UUID estável por usuário e chave permite upsert idempotente entre abas/retries.
+Erro de banco não retorna sucesso fictício. O modo demo persiste no localStorage
+antes de confirmar e utiliza o mesmo contrato de memória.
+
+Consultas comportamentais têm limite de 1.000 registros recentes por tabela; as
+afirmações referem-se aos registros examinados, não a toda a vida do usuário.
+Memórias têm paginação separada até 10.000, para não perder rejeições antigas;
+ao exceder esse limite, falha explicitamente em vez de ignorá-las.
+
+### Validação
+
+- `npm test`: 227 testes em 20 arquivos aprovados em 2026-10-05.
+  `npm run build`: aprovado (Next.js 15.5.25, 27 páginas). `git diff --check`: aprovado.
+- Testes unitários: combinações, sequências, evidência mínima, deduplicação,
+  confirmação/rejeição após serialização, parcial, recursos, fuso, Meu Norte e isolamento.
+- Testes da API com cliente simulado: proprietário, negação de acesso, rejeição de
+  conteúdo fornecido pelo cliente, upsert/retry e falhas sem sucesso fictício.
+- Navegador demo: confirmação, rejeição e mais ou menos persistiram após reload.
+  Layout desktop/móvel conferido; 390x844 sem rolagem horizontal.
+- Supabase real: RLS habilitada, políticas, grants e colunas existentes conferidos
+  por consultas somente leitura. Nenhuma alteração em dados de pacientes.
+- Gravação com uma sessão Supabase real de teste ainda requer conta disponível;
+  testes de API simulada não substituem essa verificação em produção.
+- Push em aparelho real continua sendo a pendência do Passo 10, não deste motor.
+  O próximo passo de implementação é o 11, painel profissional e segurança.
