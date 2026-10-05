@@ -31,6 +31,7 @@ import { initialEpisodeFields } from "./behavioral-episodes";
 import { disablePushDevice } from "./support-client";
 import { strategyKey } from "./microexperiments";
 import { findEquivalentMemory } from "./ai/user-behavior-context";
+import { buildInsights, insightFeedbackMemory, insightTopic, type InsightFeedback } from "./insights";
 import { buildDemoDatabase, uid, USER_ID, ADMIN_ID } from "./demo-data";
 import { computeConsistency } from "./consistency";
 import { classifyPatterns, type PatternSummary } from "./patterns";
@@ -88,6 +89,7 @@ interface StoreValue {
   updateMealSchedule: (id: string, patch: Partial<MealSchedule>) => void;
   saveMemory: (input: Pick<UserMemory, "memory_kind" | "topic" | "content"> & Partial<UserMemory>) => UserMemory;
   updateMemory: (id: string, patch: Partial<UserMemory>) => void;
+  respondToInsight: (key: string, choice: InsightFeedback) => Promise<void>;
   runSafety: (userId: string, text: string, conversationId?: string, messageId?: string) => ReturnType<typeof analyzeSafetyLocal>;
   // profissional
   addProfessionalNote: (input: Omit<ProfessionalNote, "id" | "created_at" | "updated_at">) => void;
@@ -1129,6 +1131,39 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     [mutate, sbUpdate]
   );
 
+  const respondToInsight: StoreValue["respondToInsight"] = useCallback(
+    async (key, choice) => {
+      if (!currentUserId) throw new Error("Entra novamente para salvar.");
+      let memory: UserMemory;
+      if (SB) {
+        await supabaseWritesRef.current;
+        if (writeErrorRef.current) throw new Error("Recarrega a página antes de continuar.");
+        const response = await fetch("/api/insights", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ key, choice }),
+        });
+        if (!response.ok) throw new Error("Não consegui salvar tua resposta. Tenta novamente.");
+        memory = (await response.json()).memory;
+      } else {
+        const block = buildInsights({
+          userId: currentUserId, db,
+          timezone: db.profiles.find(p => p.id === currentUserId)?.timezone,
+        }).blocks.find(b => b.key === key);
+        if (!block) throw new Error("Esse aprendizado mudou. Atualiza a página.");
+        const previous = db.user_memories.find(m =>
+          m.user_id === currentUserId && m.topic === insightTopic(key) && !m.superseded_at
+        );
+        memory = insightFeedbackMemory(currentUserId, block, choice,
+          `insight-${currentUserId}-${key}`, new Date(), previous);
+        // Do not claim success when local persistence is unavailable.
+        const next = { ...db, user_memories: [...db.user_memories.filter(m => m.id !== memory.id), memory] };
+        localStorage.setItem(DB_KEY, JSON.stringify(next));
+      }
+      mutate(d => { d.user_memories = [...d.user_memories.filter(m => m.id !== memory.id), memory]; });
+    }, [currentUserId, db, mutate]
+  );
+
   const runSafety: StoreValue["runSafety"] = useCallback(
     (userId, text, conversationId, messageId) => {
       const result = analyzeSafetyLocal(text);
@@ -1360,6 +1395,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     updateMealSchedule,
     saveMemory,
     updateMemory,
+    respondToInsight,
     runSafety,
     addProfessionalNote,
     updateRiskFlag,
