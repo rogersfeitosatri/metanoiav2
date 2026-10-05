@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useStore } from "@/lib/store";
 import type { Role } from "@/lib/types";
+import {loginDestination} from '@/lib/login-destination';
 
 export default function Home() {
   const store = useStore();
@@ -18,7 +19,7 @@ export default function Home() {
   function redirectFor(role: Role, onboarded: boolean) {
     if (role === "professional") router.push("/pro");
     else if (role === "admin") router.push("/admin");
-    else router.push(onboarded ? "/app/hoje" : "/onboarding");
+    else router.push(onboarded ? loginDestination(window.location.search) : "/onboarding");
   }
 
   return (
@@ -105,7 +106,7 @@ function DemoEntry() {
       else if (role === "admin") router.push("/admin");
       else {
         const p = store.db.profiles.find((x) => x.role === "user");
-        router.push(p?.onboarding_completed ? "/app/hoje" : "/onboarding");
+        router.push(p?.onboarding_completed ? loginDestination(window.location.search) : "/onboarding");
       }
     }, 30);
   }

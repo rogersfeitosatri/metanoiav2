@@ -10,10 +10,16 @@ export default function EvolucaoPage() {
   const userId = store.currentUserId!;
 
   const evo = computeEvolution({
-    difficulties: store.db.difficulty_events.filter((d) => d.user_id === userId),
+    userId,
+    episodes: store.db.behavioral_episodes,
+    difficulties: store.db.difficulty_events.filter(
+      (d) => d.user_id === userId,
+    ),
     thoughts: store.db.thought_records.filter((t) => t.user_id === userId),
     trials: store.db.strategy_trials.filter((t) => t.user_id === userId),
-    altThoughts: store.db.alternative_thoughts.filter((a) => a.user_id === userId),
+    altThoughts: store.db.alternative_thoughts.filter(
+      (a) => a.user_id === userId,
+    ),
   });
 
   if (evo.tooEarly) {
@@ -22,7 +28,10 @@ export default function EvolucaoPage() {
         <h1 className="text-2xl font-semibold text-sage-800">Evolução</h1>
         <EmptyState>
           {evo.headline}{" "}
-          <Link href="/app/hoje" className="font-medium text-sage-700 underline">
+          <Link
+            href="/app/hoje"
+            className="font-medium text-sage-700 underline"
+          >
             Começar uma conversa
           </Link>
         </EmptyState>
@@ -36,7 +45,9 @@ export default function EvolucaoPage() {
     <div className="space-y-5">
       <header>
         <h1 className="text-2xl font-semibold text-sage-800">Evolução</h1>
-        <p className="text-warmgray-600">O que tu está aprendendo a fazer diferente.</p>
+        <p className="text-warmgray-600">
+          O que tu está aprendendo a fazer diferente.
+        </p>
       </header>
 
       {/* Frase principal: como lidou, não se "seguiu a dieta" */}
@@ -47,15 +58,19 @@ export default function EvolucaoPage() {
       {/* Situações difíceis: contagem + leitura, nunca só o número */}
       <Card>
         <p className="text-xs font-medium uppercase tracking-wide text-warmgray-500">
-          Situações difíceis
+          Situações registradas
         </p>
         <div className="mt-2 flex items-end gap-6">
           <div>
-            <p className="text-3xl font-semibold text-sage-700">{evo.situationsThisWeek}</p>
+            <p className="text-3xl font-semibold text-sage-700">
+              {evo.situationsThisWeek}
+            </p>
             <p className="text-sm text-warmgray-500">esta semana</p>
           </div>
           <div>
-            <p className="text-2xl font-medium text-warmgray-400">{evo.situationsPreviousWeek}</p>
+            <p className="text-2xl font-medium text-warmgray-400">
+              {evo.situationsPreviousWeek}
+            </p>
             <p className="text-sm text-warmgray-400">semana anterior</p>
           </div>
         </div>
@@ -68,11 +83,16 @@ export default function EvolucaoPage() {
         )}
       </Card>
 
+      <p className="text-sm text-warmgray-500">
+        Registrar mais ou menos situações não significa melhora ou piora.
+        Comparamos o que foi percebido e feito nas oportunidades relatadas.
+      </p>
+
       {/* Habilidades por dimensão */}
       {evo.dimensions.length === 0 ? (
         <EmptyState>
-          Ainda estamos juntando informação suficiente para falar das tuas habilidades. Mais
-          algumas conversas e isso começa a aparecer aqui.
+          Ainda estamos juntando informação suficiente para falar das tuas
+          habilidades. Mais algumas conversas e isso começa a aparecer aqui.
         </EmptyState>
       ) : (
         <div className="space-y-3">
@@ -81,12 +101,21 @@ export default function EvolucaoPage() {
           ))}
         </div>
       )}
+      <Link
+        href="/app/aprendizados"
+        className="block text-sm font-medium text-sage-700 underline"
+      >
+        Ver os padrões em Aprendizados
+      </Link>
     </div>
   );
 }
 
 function DimensionCard({ dim }: { dim: SkillDimension }) {
-  const pct = dim.count && dim.count.total > 0 ? (dim.count.of / dim.count.total) * 100 : null;
+  const pct =
+    dim.count && dim.count.total > 0
+      ? (dim.count.of / dim.count.total) * 100
+      : null;
   return (
     <Card>
       <div className="flex items-start justify-between gap-3">
@@ -101,22 +130,49 @@ function DimensionCard({ dim }: { dim: SkillDimension }) {
                   : "bg-warmgray-100 text-warmgray-500"
             }`}
           >
-            {dim.trend === "up" ? "↑ melhorando" : dim.trend === "down" ? "↓ atenção" : "→ estável"}
+            {dim.trend === "up"
+              ? "↑ melhorando"
+              : dim.trend === "down"
+                ? "↓ atenção"
+                : "→ estável"}
           </span>
         )}
       </div>
       <p className="mt-1 leading-relaxed text-warmgray-700">{dim.statement}</p>
+      {dim.recentWeeks && (
+        <div className="mt-3 grid grid-cols-4 gap-2 text-center text-xs text-warmgray-500">
+          {dim.recentWeeks.map((week, n) => (
+            <div key={n}>
+              <p>{n === 3 ? "Últimos 7 dias" : `${4 - n}ª semana`}</p>
+              <p className="mt-1 font-medium text-warmgray-700">
+                {week.total ? `${week.of}/${week.total}` : "Sem dados"}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+      {dim.previous.total > 0 && (
+        <p className="mt-2 text-sm text-warmgray-500">
+          Período anterior: {dim.previous.of}/{dim.previous.total} (
+          {Math.round((dim.previous.proportion || 0) * 100)}%). Agora:{" "}
+          {dim.count.total
+            ? `${dim.count.of}/${dim.count.total} (${Math.round((dim.count.proportion || 0) * 100)}%)`
+            : "sem dados"}
+          .
+        </p>
+      )}
       {pct !== null && (
         <div className="mt-3 h-1.5 w-full rounded-full bg-warmgray-100">
           <div
             className="h-1.5 rounded-full bg-sage-400 transition-all"
-            style={{ width: `${Math.max(4, pct)}%` }}
+            style={{ width: `${pct}%` }}
           />
         </div>
       )}
-      {dim.evidence === "observed" && (
+      {!dim.trend && (
         <p className="mt-2 text-xs text-warmgray-400">
-          Baseado em poucas situações ainda — pode mudar conforme tu registrar mais.
+          Ainda é cedo para falar em tendência. Comparamos períodos com pelo
+          menos 5 oportunidades em cada um.
         </p>
       )}
     </Card>

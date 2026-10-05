@@ -252,6 +252,7 @@ export const ConversationEngineStateSchema = z.object({
     "discarded",
   ]).optional(),
   strategy_review_feedback: z.string().max(1200).optional(),
+  cognitive_result: z.enum(["helped_changed", "thought_only", "did_not_use", "did_not_help"]).optional(),
   clarification_count: z.number().int().min(0).max(10).default(0),
   unknown_count: z.number().int().min(0).max(10).default(0),
   difficulty_recorded: z.boolean().default(false),
@@ -337,6 +338,11 @@ export const ConversationHistoryItemSchema = z.object({
 });
 
 export const ConversationContextSchema = z.object({
+  support_invitation: z.object({
+    id:z.string().max(200),type:z.enum(['preventive','meal_checkin','strategy_followup']),
+    meal_name:z.string().max(200).optional(),meal_schedule_id:z.string().max(200).optional(),
+    occurrence_at:z.string().max(80).optional(),strategy_trial_id:z.string().max(200).optional(),
+  }).optional(),
   preferred_name: z.string().max(120).optional(),
   north: z.array(z.string().max(800)).max(8).default([]),
   confirmed_memories: z.array(z.string().max(800)).max(20).default([]),
@@ -431,6 +437,7 @@ export const ConversationRequestSchema = z.object({
 export type ConversationRequest = z.infer<typeof ConversationRequestSchema>;
 
 export const ConversationActionSchema = z.discriminatedUnion("type", [
+  z.object({type:z.literal('support_response'),invitation_id:z.string().max(200),outcome:z.enum(['responded','dismiss','snooze'])}),
   z.object({
     type: z.literal("record_difficulty"),
     data: ConversationCapturedDataSchema,

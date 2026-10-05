@@ -25,7 +25,7 @@ const SIGNALS: Signal[] = [
   {
     category: "vomito",
     severity: "high",
-    patterns: [/vomit|coloquei (tudo )?para fora|botei para fora|provoquei v[ôo]mito/i],
+    patterns: [/v[ôo]mit|coloquei (tudo )?para fora|botei para fora/i],
     message:
       "Obrigado por confiar isso aqui. Provocar vômito pode trazer riscos à saúde. É importante procurar o profissional que te acompanha e, se houver mal-estar intenso ou risco imediato, um serviço de urgência.",
   },

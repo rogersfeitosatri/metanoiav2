@@ -189,7 +189,9 @@ Acesso pela tela inicial (sem senha, ambiente de demonstração).
 
 ## 7. Testes executados
 
-`npm test` (vitest) — **20 testes, todos passando**:
+Validação dos Passos 9 e 10 (2026-10-05): `npm test` (Vitest) — **190 testes em 19 arquivos, todos passando**. `npm run build` passou com checagem TypeScript. `npm audit --omit=dev` retornou zero vulnerabilidades.
+
+Os testes originais continuam presentes:
 
 - **consistency.test.ts** — índice de consistência: ausência de registro não é falha;
   parcial pontua positivamente; escolha isolada não derruba o indicador; retomada;
@@ -202,8 +204,8 @@ Acesso pela tela inicial (sem senha, ambiente de demonstração).
 - **reports.test.ts** — relatório valida no schema, sem linguagem de fracasso, propõe
   próximo experimento.
 
-O build de produção (`npm run build`) compila com checagem de tipos TypeScript e gera
-todas as 14 rotas.
+As novas suítes cobrem proporções e amostras na Evolução, agenda/fuso/consentimento,
+privacidade, respostas a convites, falhas de envio simuladas e permissões do aparelho.
 
 ---
 
@@ -211,15 +213,13 @@ todas as 14 rotas.
 
 - **Modo demo (padrão)**: persistência em `localStorage`, sem autenticação real. É o
   modo totalmente navegável e usável para conhecer o produto.
-- **Modo Supabase**: requer projeto Supabase (Auth, Postgres, RLS). As migrations e as
-  políticas estão prontas; a fiação do cliente `@supabase/supabase-js` e a substituição
-  do store por repositórios server-side é a etapa de produção.
+- **Modo Supabase**: integrado a Auth, Postgres e RLS. O contexto da conversa e os
+  convites são recuperados no servidor para o usuário autenticado.
 - **IA com LLM real**: requer `ANTHROPIC_API_KEY` (ou outro provedor). Sem chave, o motor
   determinístico cobre os fluxos.
-- **Notificações push / PWA**: manifest e estrutura prontos; o envio de push e o service
-  worker de produção dependem de configuração de deploy (Vercel + provedor de push).
-- **Testes E2E** (Playwright) e cron de intervenções preventivas: a lógica de regra está
-  implementada e testada; o agendamento em produção usa `CRON_SECRET` + rota de job.
+- **Notificações push / PWA**: Web Push, service worker e cron implementados.
+  Configuração e limitações de validação estão na seção 10. Sucesso em teste com
+  provedor simulado não comprova recebimento em um aparelho real.
 
 ---
 
@@ -232,3 +232,90 @@ interface em **português do Brasil**, tratando o usuário por **"tu"**.
 
 > O Metanóia não ensina apenas o que comer. Ele ajuda a pessoa a entender como pensa
 > antes de decidir.
+
+---
+
+## 10. Auditoria e operação dos Passos 9 e 10
+
+### Base auditada
+
+Base `b4a0728`, depois do PR de memória inteligente. A Evolução já tinha dimensões,
+mas ainda usava contagens e registros de pensamento sem considerar todos os episódios.
+Rotinas e intervenções existiam no modelo; não havia envio Web Push implementado.
+A identificação de refeição próxima usava janela simétrica de 60 minutos e horário
+do servidor. O Passo 8 não aparece como uma reconstrução concluída nessa base:
+Aprendizados foi preservado, sem inventar um segundo motor de padrões.
+
+### Evolução
+
+`src/lib/evolution.ts` centraliza numerador, oportunidades, proporção, período anterior
+e evidência. Compara janelas de sete dias; tendência exige ao menos cinco oportunidades
+em cada janela e diferença de dez pontos percentuais. O limiar é de produto, não clínico.
+Retomada tem histórico de quatro semanas. Não há score geral nem progresso deduzido
+da quantidade de acessos. Convites sem refeição confirmada não entram nas oportunidades.
+Pensamentos, emoções, corpo, retomada, compensação, ponto de decisão, estratégias e
+uso de pensamentos alternativos são independentes. Autonomia só é descrita quando
+explicitamente registrada. Criação de alternativa não é uso; `times_used` não multiplica
+automaticamente o último resultado. Avaliações cognitivas usam evidência por tentativa.
+
+### Apoio opcional
+
+`support.ts` calcula ocorrências no fuso IANA escolhido. Cada horário tem dias,
+pausa, modo antes/depois/nenhum e intervalo. Preferências iniciais limitam o envio
+a dois convites/dia, ajustáveis entre um e quatro, com intervalo mínimo de 90 minutos.
+Convites de refeição vencem após 90 minutos; revisão de experimento, após 24 horas.
+Não há inferência de falha quando a pessoa ignora, dispensa ou ainda não comeu.
+Preparação, refeição e acompanhamento entram em `/app/hoje` pelo motor existente.
+O episódio anterior não é apagado. O usuário escolhe a transição quando necessário.
+
+Chave de ocorrência única e reserva transacional no Postgres impedem envios concorrentes.
+Abrir novamente o mesmo convite reutiliza o episódio sob bloqueio da linha.
+Uma edição não recria uma ocorrência já aberta, respondida ou com envio tentado.
+São preservados o resultado parcial, a situação não ocorrida e o não uso da estratégia.
+O último aparelho ativado é o destinatário; não há disparo simultâneo para todos.
+
+### Produção
+
+- Migration: `supabase/migrations/20260908230115_routine_support_notifications.sql`.
+  Aplicada ao projeto `ojrqbmayuimfzwlvxnei`; não executar novamente manualmente.
+- `/api/support/dispatch` é chamado pelo Vercel Cron a cada cinco minutos, somente
+  em produção. `CRON_SECRET` protege o endpoint. A configuração utiliza o plano
+  Vercel já existente, sem contratação de outro serviço.
+- Variáveis somente no servidor: `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`,
+  `VAPID_SUBJECT`, `CRON_SECRET`, além do `SUPABASE_SERVICE_ROLE_KEY` existente.
+  A chave pública é entregue após autenticação. Chaves privadas nunca entram em
+  variáveis `NEXT_PUBLIC_*`. As quatro variáveis de push foram cadastradas na Vercel.
+- `scripts/configure-push.ps1` atende instalações novas. Ele recusa sobrescrever
+  chaves existentes; não executar para rotacionar uma instalação com aparelhos inscritos.
+- Permissão é solicitada somente no clique em Configurações. No iOS/iPadOS, Web Push
+  exige uma instalação compatível na tela de início; validar no aparelho-alvo.
+- Conteúdo de tela bloqueada é genérico. Banco autoriza somente o proprietário do
+  convite; inscrições ficam inacessíveis a `anon` e `authenticated`.
+- Envio aceito pelo provedor não prova visualização. Erros ficam `failed`; endpoints
+  expirados são desativados. Há uma tentativa externa por ocorrência: não reenviamos
+  automaticamente falhas ambíguas, para não duplicar notificações. Convite permanece
+  disponível dentro do app enquanto relevante. Não há monitoramento de emergência.
+
+### Verificação e pendências reais
+
+- Testes automatizados: 190 aprovados; build de produção aprovado; auditoria de
+  dependências de produção sem vulnerabilidades na data acima.
+- Navegador local: cadastro/pausa de horário, convite posterior, proteção de episódio
+  aberto, resposta "Ainda não comi", reload e Evolução sem progresso inventado.
+  Configurações verificadas em viewport móvel, sem rolagem horizontal.
+- Supabase foi reativado em 2026-10-05. Migration e privilégios foram conferidos por
+  consultas de leitura; zero dispositivos e zero usuários optados em push nessa auditoria.
+- `supabase/tests/support.sql` contém verificações transacionais com rollback.
+  Não executadas no banco hospedado: o canal SQL disponível é somente leitura.
+- Recebimento real com app fechado e clique no push em Android/iOS/desktop ainda
+  precisam de uma conta e aparelho de teste. Nenhum paciente real recebeu disparos.
+  O Passo 10 não deve ser anunciado como validado integralmente em dispositivo.
+- Login real de paciente/profissional/admin não foi repetido com credenciais reais.
+- O teste de saída detectou competição entre `router.replace` e `router.refresh`.
+  Os três botões de saída agora navegam para a entrada em um documento novo após logout.
+- Advisor: inscrições sem políticas RLS são intencionais (somente servidor e grants
+  revogados). O aviso preexistente de proteção contra senhas vazadas desativada
+  permanece: https://supabase.com/docs/guides/auth/password-security#password-strength-and-leaked-password-protection.
+- Aprendizados/Passo 8, testes de carga do cron e validação real em aparelhos são
+  pendências separadas. Onboarding, Meu Norte e painel profissional não foram reconstruídos.
+  Nenhuma implementação do Passo 11 foi iniciada.

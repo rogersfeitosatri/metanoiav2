@@ -50,8 +50,7 @@ export function PanelShell({
               className="text-warmgray-500 hover:text-warmgray-800"
               onClick={async () => {
                 await store.logout();
-                router.replace("/");
-                router.refresh();
+                window.location.replace("/");
               }}
             >
               Sair

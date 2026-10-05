@@ -8,8 +8,13 @@ next-env.d.ts
 .env*.local
 .DS_Store
 /coverage
+/supabase/.temp
+/.vercel
+/artifacts
 # Skills de agente instaladas localmente (ferramental, não é código do produto)
 /.agents
 /.claude/skills
 /skills-lock.json
 
+.vercel
+.env*

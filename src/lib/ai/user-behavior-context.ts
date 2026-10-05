@@ -8,6 +8,7 @@ import type {
   Profile,
   StrategyTrial,
   UserMemory,
+  ScheduledIntervention,
 } from "../types";
 import { ConversationContextSchema, type ConversationContext } from "./schemas";
 
@@ -31,6 +32,7 @@ export interface BehaviorContextSource {
   strategyTrials: StrategyTrial[];
   episodes: BehavioralEpisode[];
   mealSchedules: MealSchedule[];
+  interventions?: ScheduledIntervention[];
 }
 
 export interface BehaviorContextQuery {
@@ -68,8 +70,9 @@ export function buildUserBehaviorContext(
   rawSource: BehaviorContextSource
 ): ConversationContext {
   const now = query.now || new Date();
-  const queryText = `${query.message || ""} ${query.intent || ""}`.trim();
   const source = isolateUserSource(userId, rawSource);
+  const invitation=source.interventions?.find(i=>i.episode_id===query.episodeId&&i.user_id===userId);
+  const queryText = `${query.message || ""} ${query.intent || ""} ${invitation?.payload.meal_name||''}`.trim();
 
   const northItems = buildNorthItems(source.copingCard, queryText).slice(
     0,
@@ -160,7 +163,7 @@ export function buildUserBehaviorContext(
   const pendingStrategies = source.strategyTrials
     .filter((trial) => trial.result === "not_tested" || trial.result === "situation_not_occurred")
     .map((trial) => ({ trial, relevance: trialRelevance(trial, queryText, now) }))
-    .sort((a, b) => b.relevance - a.relevance)
+    .sort((a, b) => Number(b.trial.id===invitation?.payload.strategy_trial_id)-Number(a.trial.id===invitation?.payload.strategy_trial_id)||b.relevance-a.relevance)
     .slice(0, BEHAVIOR_CONTEXT_LIMITS.activeExperiments)
     .map(({ trial }) => ({
       id: trial.id,
@@ -210,7 +213,7 @@ export function buildUserBehaviorContext(
       id: meal.id,
       name: meal.name,
       time: meal.time_of_day.slice(0, 5),
-      due: isMealDue(meal, now),
+      due: Boolean(invitation?.intervention_type==='meal_checkin'&&invitation.meal_schedule_id===meal.id),
     }));
 
   const selectedItems =
@@ -219,6 +222,11 @@ export function buildUserBehaviorContext(
     pendingStrategies.length + recentEpisodes.length;
 
   return ConversationContextSchema.parse({
+    support_invitation:invitation&&['preventive','meal_checkin','strategy_followup'].includes(invitation.intervention_type)?{
+      id:invitation.id,type:invitation.intervention_type,meal_name:invitation.payload.meal_name,
+      meal_schedule_id:invitation.meal_schedule_id||undefined,occurrence_at:invitation.payload.occurrence_at,
+      strategy_trial_id:invitation.payload.strategy_trial_id,
+    }:undefined,
     preferred_name: source.profile?.preferred_name,
     north: northItems.map((item) => item.content),
     confirmed_memories: relevantMemories
@@ -257,6 +265,7 @@ export function behaviorContextSourceFromDatabase(
     strategyTrials: database.strategy_trials.filter((item) => item.user_id === userId),
     episodes: database.behavioral_episodes.filter((item) => item.user_id === userId),
     mealSchedules: database.meal_schedules.filter((item) => item.user_id === userId),
+    interventions:database.scheduled_interventions.filter(i=>i.user_id===userId),
   };
 }
 
@@ -283,7 +292,14 @@ export async function buildServerUserBehaviorContext(
     throw new Error(`Falha ao recuperar contexto comportamental: ${failures.join("; ")}`);
   }
 
+  const {data:invitation}=query.episodeId?await supabase.from('scheduled_interventions').select('*').eq('user_id',userId).eq('episode_id',query.episodeId).limit(1).maybeSingle():{data:null};
+  // Direct lookup prevents an old pending trial falling outside the bounded memory window.
+  if(invitation?.payload?.strategy_trial_id){
+    const {data:trial}=await supabase.from('strategy_trials').select('*').eq('user_id',userId).eq('id',invitation.payload.strategy_trial_id).maybeSingle();
+    if(trial&&!trialResult.data?.some(t=>t.id===trial.id))trialResult.data?.push(trial);
+  }
   const context = buildUserBehaviorContext(userId, query, {
+    interventions:invitation?[invitation as ScheduledIntervention]:[],
     profile: profileResult.data as Profile | null,
     copingCard: cardResult.data as CopingCard | null,
     memories: (memoryResult.data || []) as UserMemory[],
@@ -340,6 +356,7 @@ function isolateUserSource(userId: string, source: BehaviorContextSource): Behav
     strategyTrials: source.strategyTrials.filter((item) => item.user_id === userId),
     episodes: source.episodes.filter((item) => item.user_id === userId),
     mealSchedules: source.mealSchedules.filter((item) => item.user_id === userId),
+    interventions:source.interventions?.filter(i=>i.user_id===userId),
   };
 }
 
@@ -463,14 +480,6 @@ function defaultImportance(kind: UserMemory["memory_kind"]): number {
   if (kind === "anchor" || kind === "identity") return 9;
   if (kind === "pattern" || kind === "protective_factor") return 7;
   return kind === "hypothesis" ? 4 : 5;
-}
-
-function isMealDue(meal: MealSchedule, now: Date): boolean {
-  if (!meal.days_of_week.includes(now.getDay())) return false;
-  const [hours, minutes] = meal.time_of_day.split(":").map(Number);
-  const mealMinutes = hours * 60 + minutes;
-  const currentMinutes = now.getHours() * 60 + now.getMinutes();
-  return Math.abs(currentMinutes - mealMinutes) <= 60;
 }
 
 function normalize(value: string): string {

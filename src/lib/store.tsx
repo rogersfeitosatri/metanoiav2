@@ -26,6 +26,9 @@ import type {
 } from "./types";
 import type { EpisodeCreateInput } from "./behavioral-episodes";
 import { resolveAlternativeThought } from "./alternative-thoughts";
+import { defaultPreferences, reconcileSupport, interventionIntent, RoutineSchema, PreferencesSchema, isRelevantInvitation, type SupportCommand } from "./support";
+import { initialEpisodeFields } from "./behavioral-episodes";
+import { disablePushDevice } from "./support-client";
 import { strategyKey } from "./microexperiments";
 import { findEquivalentMemory } from "./ai/user-behavior-context";
 import { buildDemoDatabase, uid, USER_ID, ADMIN_ID } from "./demo-data";
@@ -94,6 +97,9 @@ interface StoreValue {
   linkUserToProfessional: (userId: string, professionalId: string) => void;
   logAudit: (action: string, resourceType: string, resourceId: string, metadata?: Record<string, unknown>) => void;
   refreshDatabase: () => Promise<void>;
+  flushPendingWrites: () => Promise<void>;
+  syncSupportInvitations: () => void;
+  manageSupport: (command: SupportCommand) => Promise<{episodeId?:string}>;
   // selectors
   patternsFor: (userId: string) => PatternSummary;
   consistencyFor: (userId: string) => ReturnType<typeof computeConsistency>;
@@ -158,6 +164,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [authError, setAuthError] = useState<string | null>(null);
   const supabaseRef = useRef<SupabaseClient | null>(null);
   const supabaseWritesRef = useRef<Promise<void>>(Promise.resolve());
+  const writeErrorRef = useRef(false);
+  const openedSupportRef = useRef(new Map<string,string>());
 
   // ---------- Inicialização ----------
   useEffect(() => {
@@ -226,6 +234,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     supabaseWritesRef.current = supabaseWritesRef.current
       .then(operation)
       .catch((error: unknown) => {
+        writeErrorRef.current=true;
         const message = error instanceof Error ? error.message : String(error);
         console.warn(`${label}:`, message);
       });
@@ -292,6 +301,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const logout = useCallback(async () => {
     if (SB && supabaseRef.current) {
+      try { await disablePushDevice(); } catch { console.warn('Não foi possível remover o aparelho no servidor.'); }
       try {
         await supabaseRef.current.auth.signOut({ scope: "local" });
       } finally {
@@ -512,6 +522,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const addCheckin: StoreValue["addCheckin"] = useCallback(
     (input) => {
+      const existing = input.episode_id ? db.meal_checkins.find(c=>c.episode_id===input.episode_id && c.user_id===(input.user_id||currentUserId)) : undefined;
+      if(existing) return existing;
       const checkin: MealCheckin = {
         id: genId("chk"),
         user_id: input.user_id || currentUserId || USER_ID,
@@ -530,7 +542,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       sbInsert("meal_checkins", checkin as unknown as Record<string, unknown>);
       return checkin;
     },
-    [currentUserId, mutate, sbInsert]
+    [currentUserId, db.meal_checkins, mutate, sbInsert]
   );
 
   const recordDifficulty: StoreValue["recordDifficulty"] = useCallback(
@@ -621,8 +633,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
             hunger_level:
               (answers.hunger_intensity as number) ?? existingThought?.hunger_level ?? null,
             noticed_hunger_early:
-              typeof answers.hunger_intensity === "number"
-                ? (answers.hunger_intensity as number) <= 6
+              typeof answers.noticed_hunger_early === "boolean"
+                ? answers.noticed_hunger_early
                 : existingThought?.noticed_hunger_early,
             thought_self_identified:
               (answers.thought_self_identified as boolean | undefined) ??
@@ -1268,6 +1280,58 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     [db]
   );
 
+  const syncSupportInvitations = useCallback(() => {
+    if(SB||!currentUserId)return;
+    mutate(d=>{
+      if(!d.notification_preferences.some(p=>p.user_id===currentUserId))d.notification_preferences.push(defaultPreferences(currentUserId));
+      d.scheduled_interventions=reconcileSupport(d,currentUserId).map(i=>i.id===i.occurrence_key?{...i,id:crypto.randomUUID()}:i);
+    });
+  },[currentUserId,mutate]);
+
+  const manageSupport:StoreValue['manageSupport']=async(command)=>{
+    if(!currentUserId)throw new Error('Sessão não encontrada.');
+    if(SB){
+      await supabaseWritesRef.current;
+      const response=await fetch('/api/support',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(command)});
+      const json=await response.json();if(!response.ok)throw new Error(json.error||'Não consegui salvar.');
+      await refreshDatabase();return json;
+    }
+    if(command.action==='open'){
+      const cached=openedSupportRef.current.get(`${currentUserId}:${command.id}`);if(cached)return {episodeId:cached};
+      const i=db.scheduled_interventions.find(i=>i.id===command.id&&i.user_id===currentUserId);
+      if(!i)throw new Error('Convite não encontrado.');if(i.episode_id)return {episodeId:i.episode_id};
+      const p=db.notification_preferences.find(p=>p.user_id===currentUserId);
+      if(!p||!isRelevantInvitation(i,db,p))throw new Error('Esse convite já encerrou.');
+      const c=createConversation(currentUserId,'open_chat','Conversa');
+      const ep=createEpisode({user_id:currentUserId,conversation_id:c.id,...initialEpisodeFields(interventionIntent(i))});
+      openedSupportRef.current.set(`${currentUserId}:${command.id}`,ep.id);
+      mutate(d=>{const row=d.scheduled_interventions.find(x=>x.id===i.id);if(row)Object.assign(row,{episode_id:ep.id,opened_at:new Date().toISOString()});});
+      return {episodeId:ep.id};
+    }
+    const validated=command.action==='meal'?RoutineSchema.parse(command.value):command.action==='preferences'?PreferencesSchema.parse(command.value):null;
+    mutate(d=>{
+      const stamp=new Date().toISOString();
+      if(command.action==='meal'){
+        const row=validated as ReturnType<typeof RoutineSchema.parse>;
+        const existing=d.meal_schedules.find(m=>m.id===row.id&&m.user_id===currentUserId);
+        if(existing)Object.assign(existing,row,{updated_at:stamp});
+        else d.meal_schedules.push({...row,id:crypto.randomUUID(),user_id:currentUserId,created_at:stamp,updated_at:stamp});
+      }else if(command.action==='preferences'){
+        const p=d.notification_preferences.find(p=>p.user_id===currentUserId);
+        if(p)Object.assign(p,validated,{updated_at:stamp});
+        else d.notification_preferences.push({...defaultPreferences(currentUserId),...validated});
+      }else if(command.action==='delete_meal')d.meal_schedules=d.meal_schedules.filter(m=>!(m.id===command.id&&m.user_id===currentUserId));
+      else if('id' in command){
+        const i=d.scheduled_interventions.find(i=>i.id===command.id&&i.user_id===currentUserId);
+        if(i){
+          if(command.action==='snooze')Object.assign(i,{status:'sent',scheduled_for:new Date(Date.now()+30*60000).toISOString(),expires_at:new Date(Date.now()+90*60000).toISOString()});
+          else Object.assign(i,{status:command.action==='dismiss'?'cancelled':'responded',responded_at:stamp});
+        }
+      }
+      d.scheduled_interventions=reconcileSupport(d,currentUserId).map(i=>i.id===i.occurrence_key?{...i,id:crypto.randomUUID()}:i);
+    });return {};
+  };
+
   const value: StoreValue = {
     db,
     currentUserId,
@@ -1303,6 +1367,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     linkUserToProfessional,
     logAudit,
     refreshDatabase,
+    flushPendingWrites:async()=>{await supabaseWritesRef.current;if(writeErrorRef.current)throw new Error('Não consegui salvar todas as alterações. Recarrega a página antes de continuar.');},
+    syncSupportInvitations,
+    manageSupport,
     patternsFor,
     consistencyFor,
     weeklyReportFor,

@@ -34,10 +34,11 @@ const ENTRY_OPTIONS = [
 ];
 
 const MEAL_STATUS_REPLIES = [
-  "Realizei",
-  "Realizei em parte",
-  "Não realizei",
-  "Prefiro só conversar",
+  "Aconteceu como eu queria",
+  "Foi diferente, mas tudo bem",
+  "Tive dificuldade",
+  "Ainda não comi",
+  "Prefiro não registrar",
 ];
 
 const THOUGHT_EXAMPLES = [
@@ -99,7 +100,9 @@ export function createConversationState(
   intent: ConversationIntent,
   context: ConversationContext
 ): ConversationEngineState {
-  const pending = context.pending_strategies[0];
+  const pending = context.support_invitation?.strategy_trial_id
+    ? context.pending_strategies.find(t=>t.id===context.support_invitation?.strategy_trial_id)
+    : context.pending_strategies[0];
   const dueMeal = context.meals.find((meal) => meal.due);
   let stage: ConversationStage = "situation";
 
@@ -153,7 +156,7 @@ export function createOpeningTurn(
     );
   } else if (state.stage === "meal_status") {
     decision = decisionOf(
-      `${state.meal_name || "Essa refeição"} estava prevista para agora. Como foi para ti?`,
+      `Tu escolheu um apoio depois de ${state.meal_name || "essa refeição"}. Como foi para ti?`,
       "meal_status",
       MEAL_STATUS_REPLIES
     );
@@ -167,7 +170,17 @@ export function createOpeningTurn(
   } else if (intent === "register_event") {
     decision = decisionOf("Tá. Me conta o que aconteceu.", "situation");
   } else if (intent === "prepare") {
-    decision = decisionOf("O que tu quer se preparar para enfrentar?", "prepare_situation");
+    const meal = context.support_invitation?.meal_name;
+    const resource = context.effective_strategies[0];
+    if (meal && resource) {
+      state.situation = `Preparação para ${meal}`;
+      decision = decisionOf(
+        `Tu escolheu um apoio antes de ${meal}. Em situações parecidas, tu relatou ajuda ao testar “${resource}”. O que precisaria ajustar para hoje?`,
+        "prepare_obstacle"
+      );
+    } else {
+      decision = decisionOf(meal ? `Tu escolheu um apoio antes de ${meal}. Tem alguma coisa nesse momento para a qual tu quer se preparar?` : "O que tu quer se preparar para enfrentar?", "prepare_situation");
+    }
   } else if (intent === "review_strategy") {
     decision = decisionOf("Qual estratégia tu quer avaliar?", "strategy_review");
   } else if (intent === "meal_checkin") {
@@ -248,7 +261,8 @@ export function runDeterministicTurn(
   }
 
   const currentStage = state.stage;
-  const extracted = extractBehavioralData(message);
+  const mealControl = currentStage === "meal_status" && /^(?:ainda n[ãa]o comi|perguntar (?:mais tarde|em 30)|prefiro n[ãa]o registrar)/i.test(message);
+  const extracted = mealControl ? {} : extractBehavioralData(message);
   let next: ConversationEngineState = mergeCapturedDataIntoState({
     ...state,
     asked: [...new Set([...state.asked, currentStage])],
@@ -273,7 +287,6 @@ export function runDeterministicTurn(
       const hunger = extractHunger(message);
       if (hunger != null) {
         next.hunger_level = hunger;
-        next.noticed_hunger_early = hunger <= 6;
       }
       if (signals.bodyDeprivation) next.physical_context = message;
       if (signals.allOrNothing) {
@@ -368,7 +381,6 @@ export function runDeterministicTurn(
         );
       }
       next.hunger_level = hunger;
-      next.noticed_hunger_early = hunger <= 6;
       if (hunger >= 7) {
         decision = highHungerDecision(next);
       } else if (isCognitivelyRelevant(next) || signals.allOrNothing) {
@@ -894,6 +906,7 @@ export function runDeterministicTurn(
         );
         break;
       }
+      next.cognitive_result = cognitiveResult;
       let result: Exclude<
         NonNullable<ConversationEngineState["strategy_review_result"]>,
         "not_tested"
@@ -971,6 +984,15 @@ export function runDeterministicTurn(
     }
 
     case "meal_status": {
+      if(/ainda n[ãa]o comi|perguntar (?:mais tarde|em 30)/i.test(message)){
+        if(/perguntar/i.test(message)&&context.support_invitation)actions.push({type:'support_response',invitation_id:context.support_invitation.id,outcome:'snooze'});
+        decision=decisionOf('Tá. O horário combinado não quer dizer que a refeição já aconteceu. Podemos deixar para depois.','meal_status',['Perguntar em 30 minutos','Prefiro não registrar']);
+        break;
+      }
+      if(/prefiro n[ãa]o registrar/i.test(message)){
+        if(context.support_invitation)actions.push({type:'support_response',invitation_id:context.support_invitation.id,outcome:'dismiss'});
+        decision=decisionOf('Tudo bem. Não vou registrar essa refeição.','done',[],{kind:'closing',suggestClose:true});break;
+      }
       if (/prefiro/i.test(message)) {
         next.intent = "default";
         next.stage = "situation";
@@ -991,6 +1013,7 @@ export function runDeterministicTurn(
         );
       }
       next.meal_status = status;
+      if(context.support_invitation)actions.push({type:'support_response',invitation_id:context.support_invitation.id,outcome:'responded'});
       next.checkin_recorded = true;
       actions.push({
         type: "create_meal_checkin",
@@ -998,7 +1021,9 @@ export function runDeterministicTurn(
         meal_name: next.meal_name ?? null,
         status,
       });
-      decision = status === "completed"
+      decision = /diferente.*tudo bem/i.test(message)
+        ? decisionOf('Registrado como uma refeição diferente, sem dificuldade relatada.','done',[],{kind:'closing',suggestClose:true})
+        : status === "completed"
         ? decisionOf("O que ajudou essa refeição a acontecer desse jeito?", "meal_success")
         : decisionOf(
             "Tu prefere só registrar ou quer entender o que tornou esse momento mais difícil?",
@@ -1923,6 +1948,8 @@ function mapAlternativeResult(
 function mapMealStatus(
   text: string
 ): ConversationEngineState["meal_status"] | null {
+  if(/tive dificuldade/i.test(text))return 'partial';
+  if(/aconteceu como|diferente.*tudo bem/i.test(text))return 'completed';
   if (/em parte|parcial/i.test(text)) return "partial";
   if (/n[ãa]o realizei|n[ãa]o aconteceu|n[ãa]o fiz/i.test(text)) return "not_completed";
   if (/realizei|aconteceu|fiz/i.test(text)) return "completed";

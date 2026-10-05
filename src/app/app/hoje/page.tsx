@@ -1,7 +1,7 @@
 "use client";
 
-import { ConversationHome } from "@/components/chat/ConversationHome";
+import { ConversationEntry } from "@/components/chat/ConversationEntry";
 
 export default function HojePage() {
-  return <ConversationHome />;
+  return <ConversationEntry />;
 }

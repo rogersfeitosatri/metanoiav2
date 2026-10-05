@@ -116,6 +116,8 @@ export interface MealSchedule {
   time_of_day: string;
   days_of_week: number[];
   reminder_enabled: boolean;
+  support_mode?: "none" | "before" | "after";
+  support_offset_minutes?: number;
   active: boolean;
   created_at: string;
   updated_at: string;
@@ -497,6 +499,8 @@ export interface NotificationPreferences {
   id: string;
   user_id: string;
   enabled: boolean;
+  push_enabled?: boolean;
+  followup_enabled?: boolean;
   allowed_days: number[]; // 0=domingo .. 6=sabado
   allowed_start_time: string; // "08:00"
   allowed_end_time: string; // "21:00"
@@ -513,9 +517,15 @@ export interface ScheduledIntervention {
   id: string;
   user_id: string;
   meal_schedule_id?: string | null;
-  intervention_type: "preventive" | "strategy_followup" | "coping_card" | "weekly_report";
+  intervention_type: "preventive" | "meal_checkin" | "strategy_followup" | "coping_card" | "weekly_report";
   scheduled_for: string;
-  status: "scheduled" | "sent" | "responded" | "cancelled";
+  status: "scheduled" | "sending" | "sent" | "responded" | "cancelled" | "expired" | "failed";
+  occurrence_key?: string;
+  expires_at?: string;
+  episode_id?: string | null;
+  opened_at?: string | null;
+  attempted_at?: string | null;
+  last_error?: string | null;
   rule_source: string;
   payload: Record<string, unknown>;
   sent_at?: string | null;

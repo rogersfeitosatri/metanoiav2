@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 import { TypingDots } from "@/components/ui";
 import {
@@ -46,10 +46,11 @@ type Bubble = {
   episodeId?: string | null;
 };
 
-export function ConversationHome() {
+export function ConversationHome({initialEpisodeId,supportInvitations}:{initialEpisodeId?:string;supportInvitations?:ReactNode}={}) {
   const store = useStore();
   const searchParams = useSearchParams();
-  const intent = parseConversationIntent(searchParams.get("intent"));
+  const entryEpisode=store.db.behavioral_episodes.find(e=>e.id===initialEpisodeId&&e.user_id===store.currentUserId);
+  const intent = entryEpisode?.current_intent||parseConversationIntent(searchParams.get("intent"));
   const userId = store.currentUserId!;
   const [bubbles, setBubbles] = useState<Bubble[]>([]);
   const [quickReplies, setQuickReplies] = useState<string[]>([]);
@@ -66,7 +67,7 @@ export function ConversationHome() {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const entryKey = `${userId}:${intent}`;
+    const entryKey = `${userId}:${intent}:${initialEpisodeId||''}`;
     if (initializedEntryRef.current === entryKey) return;
     initializedEntryRef.current = entryKey;
 
@@ -83,7 +84,7 @@ export function ConversationHome() {
     setError(null);
 
     const config = CONVERSATION_INTENT_CONFIG[intent];
-    const selection = selectEpisodeForEntry(store.db.behavioral_episodes, {
+    const selection = entryEpisode?{kind:'resume' as const,episode:entryEpisode}:selectEpisodeForEntry(store.db.behavioral_episodes, {
       userId,
       intent,
       isReload: isPageReload(),
@@ -204,7 +205,7 @@ export function ConversationHome() {
     void requestEngine("start", undefined, existingMessages.map(toBubble));
     // O motor recebe toda dependência variável no contexto do request.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [intent, userId]);
+  }, [intent, userId, initialEpisodeId]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({
@@ -373,6 +374,7 @@ export function ConversationHome() {
     setTyping(true);
     setError(null);
     try {
+      await store.flushPendingWrites();
       const response = await fetch("/api/ai/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -440,6 +442,10 @@ export function ConversationHome() {
         data.source === "safety" ? "safety" : "assistant"
       );
       setQuickReplies(data.quick_replies);
+      await store.flushPendingWrites();
+      for(const action of data.actions.filter(a=>a.type==='support_response')){
+        if(action.type==='support_response')await store.manageSupport({action:action.outcome,id:action.invitation_id});
+      }
     } catch (caught) {
       const technical =
         caught instanceof Error &&
@@ -612,6 +618,7 @@ export function ConversationHome() {
         <h1 className="font-semibold text-sage-800">Metanóia</h1>
         <p className="text-xs text-warmgray-500">Uma pergunta de cada vez</p>
       </header>
+      {supportInvitations}
       <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto py-5">
         {bubbles.map((bubble) => (
           <div
